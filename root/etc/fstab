@@ -1,0 +1,9 @@
+# amsys fstab
+# <Windows-path>  <unix-mountpoint>
+
+# /media  (virtual directory)
+# /dev  (virtual directory)
+
+C:\  /media/c
+D:\  /media/d
+I:\  /media/i

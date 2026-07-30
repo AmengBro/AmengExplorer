@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ameng Commander</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark">
+  <div class="loading-screen" id="loading-screen">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">正在加载...</div>
+  </div>
+  <div class="app-container">
+    <nav class="nav-sidebar">
+      <div class="nav-sidebar-header" data-tauri-drag-region>
+        <div class="nav-sidebar-header-logo">
+          <img src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=sleek%20file%20manager%20logo%20with%20folder%20icon%20minimalist%20design%20blue%20accent&image_size=square" width="20" height="20">
+        </div>
+      </div>
+
+      <div class="nav-sidebar-items">
+        <button class="nav-sidebar-item active" data-location="home" data-icon="home" title="主页"></button>
+        <button class="nav-sidebar-item" data-location="desktop" data-icon="desktop" title="桌面"></button>
+        <button class="nav-sidebar-item" data-location="downloads" data-icon="download" title="下载"></button>
+        <button class="nav-sidebar-item" data-location="documents" data-icon="documents" title="文档"></button>
+        <button class="nav-sidebar-item" data-location="pictures" data-icon="pictures" title="图片"></button>
+        <button class="nav-sidebar-item" data-location="music" data-icon="music" title="音乐"></button>
+        <button class="nav-sidebar-item" data-location="videos" data-icon="videos" title="视频"></button>
+        <button class="nav-sidebar-item" data-location="trash" data-icon="trash" title="回收站"></button>
+      </div>
+
+      <div class="nav-sidebar-spacer"></div>
+
+      <div class="nav-sidebar-drives">
+        <button class="nav-sidebar-drive" data-path="C:\" data-icon="disk" title="本地磁盘 (C:)"></button>
+        <button class="nav-sidebar-drive" data-path="D:\" data-icon="disk" title="数据盘 (D:)"></button>
+        <button class="nav-sidebar-drive" data-location="network" data-icon="network" title="网络"></button>
+      </div>
+    </nav>
+
+    <div class="app-layout__main">
+      <header class="window-toolbar">
+        <div class="progressive-blur">
+          <div class="progressive-blur__layer" style="--progressive-blur-amount: 2px; --progressive-blur-start: 0%; --progressive-blur-end: 45%;"></div>
+          <div class="progressive-blur__layer" style="--progressive-blur-amount: 4px; --progressive-blur-start: 15%; --progressive-blur-end: 60%;"></div>
+          <div class="progressive-blur__layer" style="--progressive-blur-amount: 8px; --progressive-blur-start: 30%; --progressive-blur-end: 75%;"></div>
+          <div class="progressive-blur__layer" style="--progressive-blur-amount: 16px; --progressive-blur-start: 45%; --progressive-blur-end: 100%;"></div>
+        </div>
+        
+        <div class="window-toolbar-action-layer">
+          <div class="window-toolbar-row">
+            <div class="window-toolbar-left">
+              <button class="window-toolbar-button" id="command-palette-btn" data-icon="search" title="命令面板 (Ctrl+P)"></button>
+              <div class="toolbar-divider"></div>
+              <div class="toolbar-nav-controls" id="toolbar-nav-controls">
+                <button class="window-toolbar-button" id="browser-back-btn" data-icon="back" title="后退"></button>
+                <button class="window-toolbar-button" id="browser-forward-btn" data-icon="forward" title="前进"></button>
+                <button class="window-toolbar-button" id="browser-up-btn" data-icon="up" title="向上"></button>
+                <button class="window-toolbar-button" id="browser-home-btn" data-icon="home" title="主页"></button>
+                <button class="window-toolbar-button" id="browser-refresh-btn" data-icon="refresh" title="刷新"></button>
+              </div>
+              <div class="toolbar-sync-controls is-hidden" id="toolbar-sync-controls">
+                <button class="window-toolbar-button sync-btn" id="sync-panes-btn" data-icon="sync" title="同步目录"></button>
+              </div>
+            </div>
+
+            <div class="window-toolbar-center">
+              <div class="file-browser-address-bar" id="file-browser-address-bar">
+                <button class="address-bar-edit-btn" id="address-bar-edit-btn" data-icon="rename"></button>
+                <input type="text" class="address-bar-input" id="address-bar-input" value="computer://mainmenu" readonly>
+              </div>
+            </div>
+
+            <div class="window-toolbar-right">
+              <button class="window-toolbar-button" id="browser-filter-btn" data-icon="search" title="筛选"></button>
+              <button class="window-toolbar-button" id="view-list-btn" data-icon="list" title="列表视图"></button>
+              <button class="window-toolbar-button" id="view-grid-btn" data-icon="grid" title="网格视图"></button>
+              <button class="window-toolbar-button" id="view-column-btn" data-icon="alignHorizontalCenter" title="分栏视图"></button>
+              <div class="toolbar-divider"></div>
+              <button class="window-toolbar-button" id="browser-new-file-btn" data-icon="fileAdd" title="新建文件"></button>
+              <button class="window-toolbar-button" id="browser-new-folder-btn" data-icon="folderAdd" title="新建文件夹"></button>
+              <div class="toolbar-divider"></div>
+              <button class="window-toolbar-button" id="info-panel-btn" data-icon="info" title="信息面板"></button>
+              <div class="toolbar-divider"></div>
+              <button class="window-toolbar-button" id="process-panel-btn" data-icon="sineWaveDots" title="任务进度"></button>
+            </div>
+          </div>
+
+          <div class="tab-bar" id="tab-bar">
+            <div class="tab active" data-tab-id="tab-1">
+              <div class="tab-icon" data-icon="file"></div>
+              <span class="tab-label">主菜单</span>
+              <button class="tab-close" data-icon="close" title="关闭标签页"></button>
+            </div>
+            <button class="add-tab-btn" id="add-tab-btn" data-icon="plus" title="新建标签页"></button>
+          </div>
+        </div>
+      </header>
+
+      <div class="navigator-page">
+
+        <div class="navigator-main" id="navigator-main">
+          <div class="file-browser" id="file-browser">
+
+            <div class="home-page" id="home-page">
+            <div class="home-banner">
+              <div class="home-banner__media-container">
+                <img src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=beautiful%20landscape%20sunset%20mountains%20forest%20purple%20sky%20artistic%20wallpaper&image_size=landscape_16_9" 
+                     class="home-banner__media" alt="Home Banner">
+              </div>
+              <div class="home-banner__overlay home-banner__overlay--top"></div>
+              <div class="home-banner__overlay home-banner__overlay--bottom"></div>
+              <div class="home-banner__actions">
+                <span class="home-banner__title">主页</span>
+              </div>
+            </div>
+
+            <div class="home-page__content">
+              <section class="user-directories-section">
+                <div class="user-directories-section__header">
+                  <h2 class="user-directories-section__title">用户目录</h2>
+                </div>
+                <div class="user-directories-section__grid" id="user-directories-grid">
+                </div>
+              </section>
+
+              <section class="drives-section">
+                <div class="drives-section__header">
+                  <h2 class="drives-section__title">驱动器</h2>
+                </div>
+                <div class="drives-section__grid" id="drives-grid">
+                  <div class="drive-card" data-path="/">
+                    <div class="drive-card__header">
+                      <div class="drive-card__icon" data-icon="device"></div>
+                      <div class="drive-card__info">
+                        <div class="drive-card__name">root</div>
+                        <div class="drive-card__path">/</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="file-browser-content is-hidden" id="file-browser-content">
+            <div class="dual-pane-container" id="dual-pane-container">
+              <div class="file-pane file-pane-left" id="file-pane-left">
+                <div class="pane-header">
+                  <div class="pane-toolbar">
+                    <button class="pane-btn" id="pane-left-back" data-icon="back" title="后退"></button>
+                    <button class="pane-btn" id="pane-left-forward" data-icon="forward" title="前进"></button>
+                    <button class="pane-btn" id="pane-left-up" data-icon="up" title="向上"></button>
+                    <button class="pane-btn" id="pane-left-home" data-icon="home" title="主页"></button>
+                    <button class="pane-btn" id="pane-left-refresh" data-icon="refresh" title="刷新"></button>
+                  </div>
+                  <div class="pane-address-bar">
+                    <input type="text" class="pane-address-input" id="pane-left-address" value="/" readonly>
+                  </div>
+                  <div class="pane-view-controls">
+                    <button class="pane-btn" data-icon="list" title="列表"></button>
+                    <button class="pane-btn" data-icon="grid" title="网格"></button>
+                  </div>
+                </div>
+                <div class="file-list-view" id="file-list-view-left">
+                  <div class="file-list-header">
+                    <div class="list-column header-icon"></div>
+                    <div class="list-column name-column">
+                      <span class="column-title">名称</span>
+                    </div>
+                    <div class="list-column">
+                      <span class="column-title">类型</span>
+                    </div>
+                    <div class="list-column">
+                      <span class="column-title">大小</span>
+                    </div>
+                    <div class="list-column">
+                      <span class="column-title">修改时间</span>
+                    </div>
+                  </div>
+                  <div class="file-list" id="file-list-left"></div>
+                </div>
+                <div class="file-grid-view is-hidden" id="file-grid-view-left">
+                  <div class="grid-container" id="grid-container-left"></div>
+                </div>
+                <div class="pane-status-bar">
+                  <span class="pane-status-text">0 个项目</span>
+                </div>
+              </div>
+              <div class="pane-divider is-hidden" id="pane-divider"></div>
+              <div class="file-pane file-pane-right is-hidden" id="file-pane-right">
+                <div class="pane-header">
+                  <div class="pane-toolbar">
+                    <button class="pane-btn" id="pane-right-back" data-icon="back" title="后退"></button>
+                    <button class="pane-btn" id="pane-right-forward" data-icon="forward" title="前进"></button>
+                    <button class="pane-btn" id="pane-right-up" data-icon="up" title="向上"></button>
+                    <button class="pane-btn" id="pane-right-home" data-icon="home" title="主页"></button>
+                    <button class="pane-btn" id="pane-right-refresh" data-icon="refresh" title="刷新"></button>
+                  </div>
+                  <div class="pane-address-bar">
+                    <input type="text" class="pane-address-input" id="pane-right-address" value="/" readonly>
+                  </div>
+                  <div class="pane-view-controls">
+                    <button class="pane-btn" data-icon="list" title="列表"></button>
+                    <button class="pane-btn" data-icon="grid" title="网格"></button>
+                  </div>
+                </div>
+                <div class="file-list-view" id="file-list-view-right">
+                  <div class="file-list-header">
+                    <div class="list-column header-icon"></div>
+                    <div class="list-column name-column">
+                      <span class="column-title">名称</span>
+                    </div>
+                    <div class="list-column">
+                      <span class="column-title">类型</span>
+                    </div>
+                    <div class="list-column">
+                      <span class="column-title">大小</span>
+                    </div>
+                    <div class="list-column">
+                      <span class="column-title">修改时间</span>
+                    </div>
+                  </div>
+                  <div class="file-list" id="file-list-right"></div>
+                </div>
+                <div class="file-grid-view is-hidden" id="file-grid-view-right">
+                  <div class="grid-container" id="grid-container-right"></div>
+                </div>
+                <div class="pane-status-bar">
+                  <span class="pane-status-text">0 个项目</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+            <div class="file-browser-status-bar" id="file-browser-status-bar">
+              <div class="status-left">
+                <span class="status-text">0 个项目</span>
+              </div>
+              <div class="status-right">
+                <button class="status-btn" id="status-select-all-btn">全选</button>
+                <button class="status-btn" id="status-deselect-btn">取消选择</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="info-panel is-hidden" id="info-panel">
+            <div class="info-panel-header">
+              <span class="info-panel-title">属性</span>
+              <button class="info-panel-close" id="info-panel-close" data-icon="close"></button>
+            </div>
+            <div class="info-panel-content">
+              <div class="info-preview" id="info-preview">
+                <div class="preview-placeholder" data-icon="file"></div>
+              </div>
+              <div class="info-properties" id="info-properties">
+                <div class="info-row">
+                  <span class="info-label">名称</span>
+                  <span class="info-value">C:\</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">类型</span>
+                  <span class="info-value">本地磁盘</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">大小</span>
+                  <span class="info-value">计算中...</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">位置</span>
+                  <span class="info-value">本地磁盘</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">修改日期</span>
+                  <span class="info-value">-</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">创建日期</span>
+                  <span class="info-value">-</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="context-menu" id="context-menu">
+      <div class="context-menu-content">
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-open" data-icon="open">
+            <span>打开</span>
+            <span class="context-menu-shortcut">Enter</span>
+          </button>
+          <button class="context-menu-item" id="ctx-open-in-new-tab" data-icon="newTab">
+            <span>在新标签页中打开</span>
+            <span class="context-menu-shortcut">Ctrl+T</span>
+          </button>
+        </div>
+        <div class="context-menu-group">
+          <div class="context-menu-submenu">
+            <button class="context-menu-item" id="ctx-more-options" data-icon="more">
+              <span>更多选项</span>
+              <span class="context-menu-arrow">›</span>
+            </button>
+            <div class="context-menu-submenu-content" id="ctx-more-options-content">
+            </div>
+          </div>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-copy" data-icon="copy">
+            <span>复制</span>
+            <span class="context-menu-shortcut">Ctrl+C</span>
+          </button>
+          <button class="context-menu-item" id="ctx-cut" data-icon="cut">
+            <span>剪切</span>
+            <span class="context-menu-shortcut">Ctrl+X</span>
+          </button>
+          <button class="context-menu-item" id="ctx-paste" data-icon="paste">
+            <span>粘贴</span>
+            <span class="context-menu-shortcut">Ctrl+V</span>
+          </button>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-rename" data-icon="rename">
+            <span>重命名</span>
+            <span class="context-menu-shortcut">F2</span>
+          </button>
+          <button class="context-menu-item" id="ctx-delete" data-icon="delete">
+            <span>删除</span>
+            <span class="context-menu-shortcut">Delete</span>
+          </button>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-properties" data-icon="info">
+            <span>属性</span>
+            <span class="context-menu-shortcut">Alt+Enter</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-palette" id="command-palette">
+      <div class="command-palette-content">
+        <div class="command-palette-header">
+          <span data-icon="search"></span>
+          <input type="text" class="command-palette-input" id="command-palette-input" placeholder="输入命令搜索...">
+        </div>
+        <div class="command-palette-list" id="command-palette-list">
+          <div class="command-section">
+            <span class="command-section-title">文件操作</span>
+            <button class="command-item" data-command="new-file" data-icon="fileAdd">
+              <span>新建文件</span>
+              <span class="command-shortcut">Ctrl+N</span>
+            </button>
+            <button class="command-item" data-command="new-folder" data-icon="folderAdd">
+              <span>新建文件夹</span>
+              <span class="command-shortcut">Ctrl+Shift+N</span>
+            </button>
+            <button class="command-item" data-command="delete" data-icon="delete">
+              <span>删除</span>
+              <span class="command-shortcut">Delete</span>
+            </button>
+          </div>
+          <div class="command-section">
+            <span class="command-section-title">导航</span>
+            <button class="command-item" data-command="go-back" data-icon="back">
+              <span>后退</span>
+              <span class="command-shortcut">Alt+←</span>
+            </button>
+            <button class="command-item" data-command="go-forward" data-icon="forward">
+              <span>前进</span>
+              <span class="command-shortcut">Alt+→</span>
+            </button>
+            <button class="command-item" data-command="go-up" data-icon="up">
+              <span>向上</span>
+              <span class="command-shortcut">Alt+↑</span>
+            </button>
+            <button class="command-item" data-command="refresh" data-icon="refresh">
+              <span>刷新</span>
+              <span class="command-shortcut">F5</span>
+            </button>
+          </div>
+          <div class="command-section">
+            <span class="command-section-title">视图</span>
+            <button class="command-item" data-command="toggle-list-view" data-icon="list">
+              <span>列表视图</span>
+              <span class="command-shortcut">Ctrl+Shift+1</span>
+            </button>
+            <button class="command-item" data-command="toggle-grid-view" data-icon="grid">
+              <span>网格视图</span>
+              <span class="command-shortcut">Ctrl+Shift+2</span>
+            </button>
+            <button class="command-item" data-command="toggle-info-panel" data-icon="info">
+              <span>信息面板</span>
+              <span class="command-shortcut">Ctrl+I</span>
+            </button>
+          </div>
+          <div class="command-section">
+            <span class="command-section-title">编辑</span>
+            <button class="command-item" data-command="copy" data-icon="copy">
+              <span>复制</span>
+              <span class="command-shortcut">Ctrl+C</span>
+            </button>
+            <button class="command-item" data-command="cut" data-icon="cut">
+              <span>剪切</span>
+              <span class="command-shortcut">Ctrl+X</span>
+            </button>
+            <button class="command-item" data-command="paste" data-icon="paste">
+              <span>粘贴</span>
+              <span class="command-shortcut">Ctrl+V</span>
+            </button>
+            <button class="command-item" data-command="select-all" data-icon="file">
+              <span>全选</span>
+              <span class="command-shortcut">Ctrl+A</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    
+
+    <div class="dialog-overlay" id="dialog-overlay"></div>
+    <div class="dialog" id="dialog">
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <span class="dialog-title" id="dialog-title">提示</span>
+          <button class="dialog-close" id="dialog-close" data-icon="close"></button>
+        </div>
+        <div class="dialog-body" id="dialog-body"></div>
+        <div class="dialog-footer">
+          <button class="dialog-btn dialog-btn-secondary" id="dialog-cancel">取消</button>
+          <button class="dialog-btn dialog-btn-primary" id="dialog-confirm">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-center-popover is-hidden" id="status-center-popover">
+      <div class="status-center">
+        <div class="status-center-header">
+          <span data-icon="activity"></span>
+          <span class="status-center-title">任务进度</span>
+        </div>
+        <div class="status-center-content" id="status-center-content">
+          <div class="status-center-empty">
+            <span data-icon="activity"></span>
+            <span>暂无正在进行的任务</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="js/app.js"></script>
+  </div>
+</body>
+</html>

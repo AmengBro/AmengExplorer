@@ -1,0 +1,3421 @@
+class FileManager {
+  constructor() {
+    this.vfs = new (require('./js/virtual-fs'))();
+    this.os = require('os');
+    this.icons = require('./js/icons');
+    
+    this.selectedItems = [];
+    this.copyBuffer = [];
+    this.copyMode = 'copy';
+    
+    this.currentView = 'list';
+    this.infoPanelVisible = false;
+    this.processPanelVisible = false;
+    
+    this.sortColumn = 'name';
+    this.sortDirection = 'asc';
+    
+    this.tasks = [];
+    this.taskIdCounter = 1;
+    this.sizeCache = new Map();
+    
+    this.tabIdCounter = 1;
+    this.currentTabId = 'tab-1';
+    this.tabs = {};
+    this.tabs['tab-1'] = {
+      path: 'computer://mainmenu',
+      history: ['computer://mainmenu'],
+      historyIndex: 0
+    };
+    
+    this.init();
+  }
+  
+  init() {
+    try { this.initTabs(); } catch(e) { console.error('initTabs failed:', e); }
+    try { this.initFileBrowser(); } catch(e) { console.error('initFileBrowser failed:', e); }
+    try { this.initContextMenu(); } catch(e) { console.error('initContextMenu failed:', e); }
+    try { this.initCommandPalette(); } catch(e) { console.error('initCommandPalette failed:', e); }
+    try { this.initInfoPanel(); } catch(e) { console.error('initInfoPanel failed:', e); }
+    try { this.initKeyboardShortcuts(); } catch(e) { console.error('initKeyboardShortcuts failed:', e); }
+    try { this.initViewButtons(); } catch(e) { console.error('initViewButtons failed:', e); }
+    try { this.initSidebar(); } catch(e) { console.error('initSidebar failed:', e); }
+    
+    this.hideLoadingScreen();
+    
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        console.log('DOMContentLoaded: calling showHome()');
+        this.showHome();
+      });
+    } else {
+      console.log('DOM already ready: calling showHome()');
+      this.showHome();
+    }
+  }
+  
+  hideLoadingScreen() {
+    setTimeout(() => {
+      const loadingScreen = document.getElementById('loading-screen');
+      if (loadingScreen) {
+        loadingScreen.classList.add('is-hidden');
+        setTimeout(() => {
+          loadingScreen.remove();
+        }, 300);
+      }
+    }, 500);
+  }
+  
+  initTabs() {
+    document.getElementById('add-tab-btn').addEventListener('click', () => {
+      this.createNewTab();
+    });
+    
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', (e) => {
+        if (!e.target.closest('.tab-close')) {
+          const tabId = tab.dataset.tabId;
+          this.switchTab(tabId);
+        }
+      });
+      
+      const closeBtn = tab.querySelector('.tab-close');
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tabId = tab.dataset.tabId;
+        this.closeTab(tabId);
+      });
+    });
+  }
+  
+  createNewTab(initialPath = null) {
+    this.tabIdCounter++;
+    const newTabId = `tab-${this.tabIdCounter}`;
+    
+    const targetPath = initialPath || this.getCurrentTabPath() || '/';
+    
+    this.tabs[newTabId] = {
+      path: targetPath,
+      history: [targetPath],
+      historyIndex: 0
+    };
+    
+    const label = targetPath === '/' ? '主菜单' : targetPath.split('/').pop();
+    
+    const tab = document.createElement('div');
+    tab.className = 'tab';
+    tab.dataset.tabId = newTabId;
+    tab.innerHTML = `
+      <div class="tab-icon">
+        ${this.icons.desktop}
+      </div>
+      <span class="tab-label">${label}</span>
+      <button class="tab-close" title="关闭标签页">
+        ${this.icons.close}
+      </button>
+    `;
+    
+    const addBtn = document.getElementById('add-tab-btn');
+    const tabBar = document.querySelector('.tab-bar');
+    tabBar.insertBefore(tab, addBtn);
+    
+    tab.addEventListener('click', (e) => {
+      if (!e.target.closest('.tab-close')) {
+        this.switchTab(newTabId);
+      }
+    });
+    
+    const closeBtn = tab.querySelector('.tab-close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeTab(newTabId);
+    });
+    
+    this.switchTab(newTabId);
+  }
+  
+  getCurrentTabPath() {
+    return this.tabs[this.currentTabId]?.path || '/';
+  }
+  
+  getCurrentTabHistory() {
+    return this.tabs[this.currentTabId]?.history || ['/'];
+  }
+  
+  getCurrentTabHistoryIndex() {
+    return this.tabs[this.currentTabId]?.historyIndex || 0;
+  }
+  
+  switchTab(tabId) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    const tab = document.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tab) {
+      tab.classList.add('active');
+      this.currentTabId = tabId;
+      
+      const tabState = this.tabs[tabId];
+      if (tabState) {
+        if (tabState.path === 'computer://mainmenu') {
+          this.showHome();
+        } else {
+          this.loadDirectory(tabState.path, true);
+        }
+      }
+    }
+  }
+  
+  closeTab(tabId) {
+    const tabs = document.querySelectorAll('.tab');
+    if (tabs.length <= 1) return;
+    
+    const tab = document.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tab) {
+      tab.remove();
+      
+      delete this.tabs[tabId];
+      
+      if (tabId === this.currentTabId) {
+        const remainingTabs = document.querySelectorAll('.tab');
+        if (remainingTabs.length > 0) {
+          this.switchTab(remainingTabs[0].dataset.tabId);
+        }
+      }
+    }
+  }
+  
+  initFileBrowser() {
+    document.getElementById('browser-back-btn').addEventListener('click', () => {
+      this.goBack();
+    });
+    
+    document.getElementById('browser-forward-btn').addEventListener('click', () => {
+      this.goForward();
+    });
+    
+    document.getElementById('browser-up-btn').addEventListener('click', () => {
+      this.goUp();
+    });
+    
+    document.getElementById('browser-home-btn').addEventListener('click', () => {
+      this.goHome();
+    });
+    
+    document.getElementById('browser-refresh-btn').addEventListener('click', () => {
+      this.refresh();
+    });
+    
+    document.getElementById('address-bar-edit-btn').addEventListener('click', () => {
+      this.editAddressBar();
+    });
+    
+    document.getElementById('address-bar-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        this.navigateTo(this.addressBarInput.value);
+        this.addressBarInput.readOnly = true;
+      } else if (e.key === 'Escape') {
+        this.addressBarInput.value = this.currentPath;
+        this.addressBarInput.readOnly = true;
+      }
+    });
+    
+    document.getElementById('browser-new-file-btn').addEventListener('click', () => {
+      this.createNewFile();
+    });
+    
+    document.getElementById('browser-new-folder-btn').addEventListener('click', () => {
+      this.createNewFolder();
+    });
+    
+    document.getElementById('status-select-all-btn').addEventListener('click', () => {
+      this.selectAll();
+    });
+    
+    document.getElementById('status-deselect-btn').addEventListener('click', () => {
+      this.deselectAll();
+    });
+    
+    // 绑定左右面板的事件
+    const bindEvents = (listId, gridId) => {
+      const list = document.getElementById(listId);
+      if (list) {
+        list.addEventListener('click', (e) => {
+          const item = e.target.closest('.file-item');
+          if (item) this.handleFileClick(item, e);
+        });
+        list.addEventListener('dblclick', (e) => {
+          const item = e.target.closest('.file-item');
+          if (item) this.handleFileDoubleClick(item);
+        });
+        list.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const item = e.target.closest('.file-item');
+          this.showContextMenu(e.clientX, e.clientY, item);
+        });
+      }
+      
+      const grid = document.getElementById(gridId);
+      if (grid) {
+        grid.addEventListener('click', (e) => {
+          const item = e.target.closest('.grid-item');
+          if (item) this.handleFileClick(item, e);
+        });
+        grid.addEventListener('dblclick', (e) => {
+          const item = e.target.closest('.grid-item');
+          if (item) this.handleFileDoubleClick(item);
+        });
+        grid.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const item = e.target.closest('.grid-item');
+          this.showContextMenu(e.clientX, e.clientY, item);
+        });
+      }
+    };
+    
+    bindEvents('file-list-left', 'grid-container-left');
+    bindEvents('file-list-right', 'grid-container-right');
+    
+    this.navBackBtn = document.getElementById('browser-back-btn');
+    this.navForwardBtn = document.getElementById('browser-forward-btn');
+    this.navUpBtn = document.getElementById('browser-up-btn');
+    this.navHomeBtn = document.getElementById('browser-home-btn');
+    this.navRefreshBtn = document.getElementById('browser-refresh-btn');
+    this.navNewFileBtn = document.getElementById('browser-new-file-btn');
+    this.navNewFolderBtn = document.getElementById('browser-new-folder-btn');
+    
+    this.navBackBtn.addEventListener('click', () => this.goBack());
+    this.navForwardBtn.addEventListener('click', () => this.goForward());
+    this.navUpBtn.addEventListener('click', () => this.goUp());
+    this.navHomeBtn.addEventListener('click', () => this.goHome());
+    this.navRefreshBtn.addEventListener('click', () => this.refresh());
+    this.navNewFileBtn.addEventListener('click', () => this.createNewFile());
+    this.navNewFolderBtn.addEventListener('click', () => this.createNewFolder());
+    
+    this.addressBarInput = document.getElementById('address-bar-input');
+    this.fileList = document.getElementById('file-list-left') || document.getElementById('file-list');
+    this.gridContainer = document.getElementById('grid-container-left') || document.getElementById('grid-container');
+    this.statusText = document.querySelector('.status-text');
+    
+    // 绑定双面板控件事件
+    this.initDualPaneControls();
+  }
+  
+  initDualPaneControls() {
+    // 当前活动面板（用户最近操作的面板）
+    this.activePane = 'left';
+    
+    // 同步按钮
+    const syncBtn = document.getElementById('sync-panes-btn');
+    if (syncBtn) {
+      syncBtn.addEventListener('click', () => {
+        this.syncPanes();
+      });
+    }
+    
+    // 右侧面板历史（用于记录右侧面板的路径）
+    this.rightPaneHistory = ['/'];
+    this.rightPaneHistoryIndex = 0;
+    
+    // 左侧面板导航按钮
+    const leftBackBtn = document.getElementById('pane-left-back');
+    const leftForwardBtn = document.getElementById('pane-left-forward');
+    const leftUpBtn = document.getElementById('pane-left-up');
+    const leftHomeBtn = document.getElementById('pane-left-home');
+    const leftRefreshBtn = document.getElementById('pane-left-refresh');
+    const leftAddressInput = document.getElementById('pane-left-address');
+    
+    // 右侧面板导航按钮
+    const rightBackBtn = document.getElementById('pane-right-back');
+    const rightForwardBtn = document.getElementById('pane-right-forward');
+    const rightUpBtn = document.getElementById('pane-right-up');
+    const rightHomeBtn = document.getElementById('pane-right-home');
+    const rightRefreshBtn = document.getElementById('pane-right-refresh');
+    const rightAddressInput = document.getElementById('pane-right-address');
+    const rightPane = document.getElementById('file-pane-right');
+    const leftPane = document.getElementById('file-pane-left');
+    
+    // 标记右侧面板为活动面板
+    const setRightActive = () => {
+      this.activePane = 'right';
+    };
+    
+    // 标记左侧面板为活动面板
+    const setLeftActive = () => {
+      this.activePane = 'left';
+    };
+    
+    // 为右侧面板添加点击监听，标记为活动面板
+    if (rightPane) {
+      rightPane.addEventListener('mousedown', setRightActive);
+    }
+    
+    // 为左侧面板添加点击监听，标记为活动面板
+    if (leftPane) {
+      leftPane.addEventListener('mousedown', setLeftActive);
+    }
+    
+    // 左侧面板导航按钮事件绑定
+    if (leftBackBtn) {
+      leftBackBtn.addEventListener('click', () => {
+        setLeftActive();
+        // 使用主面板的历史
+        const history = this.tabs[this.currentTabId]?.history || [];
+        const historyIndex = this.tabs[this.currentTabId]?.historyIndex || 0;
+        if (historyIndex > 0) {
+          const newPath = history[historyIndex - 1];
+          this.tabs[this.currentTabId].historyIndex = historyIndex - 1;
+          this.loadDirectory(newPath);
+        }
+      });
+    }
+    
+    if (leftForwardBtn) {
+      leftForwardBtn.addEventListener('click', () => {
+        setLeftActive();
+        const history = this.tabs[this.currentTabId]?.history || [];
+        const historyIndex = this.tabs[this.currentTabId]?.historyIndex || 0;
+        if (historyIndex < history.length - 1) {
+          const newPath = history[historyIndex + 1];
+          this.tabs[this.currentTabId].historyIndex = historyIndex + 1;
+          this.loadDirectory(newPath);
+        }
+      });
+    }
+    
+    if (leftUpBtn) {
+      leftUpBtn.addEventListener('click', () => {
+        setLeftActive();
+        const parentPath = this.getParentPath(this.currentPath);
+        this.loadDirectory(parentPath);
+      });
+    }
+    
+    if (leftHomeBtn) {
+      leftHomeBtn.addEventListener('click', () => {
+        setLeftActive();
+        this.goHome();
+      });
+    }
+    
+    if (leftRefreshBtn) {
+      leftRefreshBtn.addEventListener('click', () => {
+        setLeftActive();
+        this.loadDirectory(this.currentPath);
+      });
+    }
+    
+    // 左侧地址栏事件绑定
+    if (leftAddressInput) {
+      leftAddressInput.addEventListener('focus', setLeftActive);
+      leftAddressInput.addEventListener('keydown', (e) => {
+        setLeftActive();
+        if (e.key === 'Enter') {
+          const newPath = leftAddressInput.value;
+          this.loadDirectory(newPath);
+          leftAddressInput.readOnly = true;
+        } else if (e.key === 'Escape') {
+          leftAddressInput.value = this.currentPath;
+          leftAddressInput.readOnly = true;
+        }
+      });
+      
+      leftAddressInput.addEventListener('dblclick', () => {
+        setLeftActive();
+        leftAddressInput.readOnly = false;
+        leftAddressInput.focus();
+        leftAddressInput.select();
+      });
+    }
+    
+    if (rightBackBtn) {
+      rightBackBtn.addEventListener('click', () => {
+        setRightActive();
+        if (this.rightPaneHistoryIndex > 0) {
+          this.rightPaneHistoryIndex--;
+          const path = this.rightPaneHistory[this.rightPaneHistoryIndex];
+          this.loadRightPanel(path, false);
+          if (rightAddressInput) rightAddressInput.value = path;
+        }
+      });
+    }
+    
+    if (rightForwardBtn) {
+      rightForwardBtn.addEventListener('click', () => {
+        setRightActive();
+        if (this.rightPaneHistoryIndex < this.rightPaneHistory.length - 1) {
+          this.rightPaneHistoryIndex++;
+          const path = this.rightPaneHistory[this.rightPaneHistoryIndex];
+          this.loadRightPanel(path, false);
+          if (rightAddressInput) rightAddressInput.value = path;
+        }
+      });
+    }
+    
+    if (rightUpBtn) {
+      rightUpBtn.addEventListener('click', () => {
+        setRightActive();
+        const currentPath = rightAddressInput?.value || '/';
+        const parentPath = this.getParentPath(currentPath);
+        this.loadRightPanel(parentPath);
+        if (rightAddressInput) rightAddressInput.value = parentPath;
+      });
+    }
+    
+    if (rightHomeBtn) {
+      rightHomeBtn.addEventListener('click', () => {
+        setRightActive();
+        this.loadRightPanel('/');
+        if (rightAddressInput) rightAddressInput.value = '/';
+      });
+    }
+    
+    if (rightRefreshBtn) {
+      rightRefreshBtn.addEventListener('click', () => {
+        setRightActive();
+        const currentPath = rightAddressInput?.value || '/';
+        this.loadRightPanel(currentPath, false);
+      });
+    }
+    
+    // 右侧地址栏导航
+    if (rightAddressInput) {
+      rightAddressInput.addEventListener('focus', setRightActive);
+      rightAddressInput.addEventListener('keydown', (e) => {
+        setRightActive();
+        if (e.key === 'Enter') {
+          const newPath = rightAddressInput.value;
+          this.loadRightPanel(newPath);
+          rightAddressInput.readOnly = true;
+        } else if (e.key === 'Escape') {
+          rightAddressInput.value = this.rightPaneHistory[this.rightPaneHistoryIndex] || '/';
+          rightAddressInput.readOnly = true;
+        }
+      });
+      
+      rightAddressInput.addEventListener('dblclick', () => {
+        setRightActive();
+        rightAddressInput.readOnly = false;
+        rightAddressInput.focus();
+        rightAddressInput.select();
+      });
+    }
+  }
+  
+  async loadDirectory(dirPath, fromTabSwitch = false) {
+    if (dirPath === 'computer://mainmenu') {
+      this.showHome();
+      return;
+    }
+    
+    // 防并发：如果正在加载，取消之前的操作
+    if (this._loadToken !== undefined) {
+      this._loadCancelled = true;
+    }
+    const currentToken = Date.now();
+    this._loadToken = currentToken;
+    this._loadCancelled = false;
+    
+    const checkCancelled = () => {
+      if (this._loadCancelled || this._loadToken !== currentToken) {
+        throw new Error('cancelled');
+      }
+    };
+    
+    try {
+      const stats = await this.vfs.stat(dirPath);
+      checkCancelled();
+      if (!stats || !stats.isDirectory()) {
+        dirPath = this.getParentPath(dirPath);
+      }
+    } catch (err) {
+      if (err.message === 'cancelled') return;
+      console.error('loadDirectory: stat failed for:', dirPath, 'error:', err.message);
+      this.showDialog('错误', `无法访问目录: ${dirPath}`, 'error');
+      return;
+    }
+    
+    this.showFileBrowser();
+    
+    this.currentPath = dirPath;
+    if (this.addressBarInput) {
+      this.addressBarInput.value = dirPath;
+    }
+    
+    const tabState = this.tabs[this.currentTabId];
+    if (tabState) {
+      tabState.path = dirPath;
+      if (!fromTabSwitch) {
+        this.updateHistory(dirPath);
+      }
+    }
+    
+    try {
+      const entries = await this.vfs.readdir(dirPath);
+      checkCancelled();
+      
+      const files = entries.map(entry => ({
+        name: entry.name,
+        isDirectory: dirPath !== '/dev' && !dirPath.startsWith('/dev/') && entry.type === 'dir',
+        size: entry.size || 0,
+        mtime: entry.mtime || ''
+      })).filter(f => f.name);
+      
+      const sortedFiles = files.sort((a, b) => {
+        if (a.isDirectory && !b.isDirectory) return -1;
+        if (!a.isDirectory && b.isDirectory) return 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+      
+      const fileData = await this.renderFileList(sortedFiles);
+      checkCancelled();
+      if (typeof this.updateStatusBar === 'function') {
+        this.updateStatusBar(sortedFiles.length);
+      }
+      
+      const tab = document.querySelector(`[data-tab-id="${this.currentTabId}"]`);
+      if (tab) {
+        const label = tab.querySelector('.tab-label');
+        if (label) {
+          label.textContent = dirPath;
+        }
+      }
+
+      // 自动计算子文件夹大小（500ms 超时，后台 worker 线程，不阻塞 UI）
+      // 传当前 token 以便 autoCalc 完成后验证是否仍然有效
+      const loadToken = currentToken;
+      this.autoCalcSubfolderSizes(fileData, loadToken).catch(err =>
+        console.error('auto calc subfolder sizes failed:', err)
+      );
+      
+    } catch (err) {
+      if (err.message === 'cancelled') return;
+      console.error('Failed to read directory:', err);
+      this.showDialog('错误', `无法读取目录: ${err.message}`, 'error');
+    }
+  }
+  
+  async renderFileList(files) {
+    if (this._loadCancelled) return [];
+    
+    const fileListLeft = document.getElementById('file-list-left');
+    const fileListRight = document.getElementById('file-list-right');
+    const gridContainerLeft = document.getElementById('grid-container-left');
+    const gridContainerRight = document.getElementById('grid-container-right');
+    
+    if (fileListLeft) fileListLeft.innerHTML = '';
+    if (fileListRight) fileListRight.innerHTML = '';
+    if (gridContainerLeft) gridContainerLeft.innerHTML = '';
+    if (gridContainerRight) gridContainerRight.innerHTML = '';
+    
+    const isVirtualDir = await this.vfs.isVirtualPath(this.currentPath);
+    
+    if (this._loadCancelled) return [];
+    
+    const filePromises = files.map(async file => {
+      const fullPath = this.joinPath(this.currentPath, file.name);
+      const isVirtual = file.is_virtual === true || await this.vfs.isVirtualPath(fullPath);
+      let size = file.size;
+      let isDir = file.isDirectory;
+      
+      if (!isVirtual && !isDir) {
+        try {
+          const realStats = await this.vfs.stat(fullPath);
+          if (realStats && realStats.isDirectory && realStats.isDirectory()) {
+            isDir = true;
+          }
+        } catch (e) {
+        }
+      }
+      
+      if (!isVirtual && !isDir) {
+        try {
+          const winPath = this.vfs.unixToWindowsPath(fullPath);
+          if (winPath) {
+            const fs = require('fs').promises;
+            const stat = await fs.stat(winPath);
+            size = stat.size;
+          }
+        } catch (e) {
+        }
+      }
+      
+      const stats = {
+        isDirectory: () => isDir,
+        isFile: () => !isDir,
+        size: size,
+        mtime: new Date(file.mtime || Date.now()),
+        isVirtual: isVirtual
+      };
+      
+      return { file: { ...file, isDirectory: isDir }, fullPath, stats };
+    });
+    
+    const fileData = await Promise.all(filePromises);
+    
+    if (this._loadCancelled) return [];
+    
+    fileData.forEach(({ file, fullPath, stats }) => {
+      // 为每个面板创建独立的元素，避免 cloneNode 丢失事件监听器
+      if (fileListLeft) {
+        const item = this.createFileItem(file, fullPath, stats);
+        fileListLeft.appendChild(item);
+      }
+      if (fileListRight) {
+        const item = this.createFileItem(file, fullPath, stats);
+        fileListRight.appendChild(item);
+      }
+      if (gridContainerLeft) {
+        const gridItem = this.createGridItem(file, fullPath, stats);
+        gridContainerLeft.appendChild(gridItem);
+      }
+      if (gridContainerRight) {
+        const gridItem = this.createGridItem(file, fullPath, stats);
+        gridContainerRight.appendChild(gridItem);
+      }
+    });
+    
+    this.updateNavigationButtons();
+    return fileData;
+  }
+  
+  joinPath(base, name) {
+    if (base === '/') return '/' + name;
+    return base + '/' + name;
+  }
+  
+  getParentPath(path) {
+    if (path === '/') return '/';
+    const parts = path.split('/').filter(p => p);
+    parts.pop();
+    return parts.length === 0 ? '/' : '/' + parts.join('/');
+  }
+  
+  createFileItem(file, fullPath, stats) {
+    const div = document.createElement('div');
+    div.className = 'file-item';
+    div.dataset.path = fullPath;
+    div.dataset.name = file.name;
+    
+    let iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    let iconSvg = this.getFileIcon(file, fullPath);
+    
+    const isDir = file.isDirectory;
+    const fileSize = stats.size;
+    const isVirtual = stats.isVirtual;
+    
+    let sizeDisplay;
+    if (isVirtual) {
+      sizeDisplay = '无';
+    } else if (isDir) {
+      // 检查缓存中是否已有计算结果
+      const cached = this.sizeCache.get(fullPath);
+      if (cached) {
+        if (cached.status === 'virtual') {
+          sizeDisplay = '无';
+        } else if (cached.status === 'ok') {
+          sizeDisplay = '<span class="cached-size">' + cached.text + '</span>';
+        }
+      } else {
+        // 初始显示"查看"，autoCalcSubfolderSizes 会异步更新为大小
+        sizeDisplay = '<button class="file-item-size-btn" data-path="' + fullPath + '">查看</button>';
+      }
+    } else {
+      sizeDisplay = fileSize > 0 ? this.formatFileSize(fileSize) : '无';
+    }
+    
+    const date = stats.mtime.toLocaleString('zh-CN');
+    const type = this.getFileType(file.name);
+    
+    div.innerHTML = `
+      <div class="file-item-icon ${iconType}">${iconSvg}</div>
+      <div class="file-item-name">${file.name}</div>
+      <div class="file-item-type">${type}</div>
+      <div class="file-item-size">${sizeDisplay}</div>
+      <div class="file-item-date">${date}</div>
+    `;
+    
+    if (isDir) {
+      const sizeBtn = div.querySelector('.file-item-size-btn');
+      if (sizeBtn) {
+        sizeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const btn = e.target;
+          if (btn.dataset.loading) return;
+
+          btn.dataset.loading = 'true';
+          btn.textContent = '计算中...';
+
+          const result = await this.calculateDirectorySize(fullPath);
+          
+          // 更新所有面板中相同路径的按钮
+          const allBtns = document.querySelectorAll(`.file-item-size-btn[data-path="${fullPath}"]`);
+          
+          if (result.status === 'virtual') {
+            allBtns.forEach(b => {
+              b.textContent = '无';
+              delete b.dataset.loading;
+            });
+            this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
+          } else if (result.status === 'error') {
+            allBtns.forEach(b => {
+              b.textContent = '错误';
+              delete b.dataset.loading;
+            });
+            this.sizeCache.delete(fullPath);
+          } else if (result.status === 'cancelled') {
+            allBtns.forEach(b => {
+              b.textContent = '查看';
+              delete b.dataset.loading;
+            });
+            this.sizeCache.delete(fullPath);
+          } else {
+            const sizeText = this.formatFileSize(result.size);
+            allBtns.forEach(b => {
+              b.textContent = sizeText;
+              b.classList.add('auto-calculated');
+              delete b.dataset.loading;
+            });
+            this.sizeCache.set(fullPath, { status: 'ok', size: result.size, fileCount: result.fileCount, text: sizeText });
+          }
+        });
+      }
+      
+      // 缓存的大小文本也可点击重新计算
+      const cachedSize = div.querySelector('.cached-size');
+      if (cachedSize) {
+        cachedSize.style.cursor = 'pointer';
+        cachedSize.title = '点击重新计算';
+        cachedSize.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          this.sizeCache.delete(fullPath);
+          
+          // 更新所有面板中的按钮
+          const allBtns = document.querySelectorAll(`.file-item-size-btn[data-path="${fullPath}"]`);
+          allBtns.forEach(b => {
+            b.textContent = '计算中...';
+          });
+          
+          try {
+            const result = await this.calculateDirectorySize(fullPath);
+            if (result.status === 'virtual') {
+              allBtns.forEach(b => {
+                b.textContent = '无';
+                b.classList.remove('auto-calculated');
+              });
+              this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
+            } else if (result.status === 'ok') {
+              const sizeText = this.formatFileSize(result.size);
+              allBtns.forEach(b => {
+                b.textContent = sizeText;
+                b.classList.add('auto-calculated');
+              });
+              this.sizeCache.set(fullPath, { status: 'ok', size: result.size, fileCount: result.fileCount, text: sizeText });
+            }
+          } catch {
+            allBtns.forEach(b => {
+              b.textContent = '查看';
+            });
+          }
+        });
+      }
+    }
+    
+    return div;
+  }
+  
+  createGridItem(file, fullPath, stats) {
+    const div = document.createElement('div');
+    div.className = 'grid-item';
+    div.dataset.path = fullPath;
+    div.dataset.name = file.name;
+    
+    let iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    let iconSvg = this.getFileIcon(file, fullPath);
+    
+    const isDir = file.isDirectory;
+    const fileSize = stats.size;
+    const isVirtual = stats.isVirtual;
+    
+    let sizeDisplay;
+    if (isDir) {
+      sizeDisplay = '无';
+    } else {
+      sizeDisplay = fileSize > 0 ? this.formatFileSize(fileSize) : '无';
+    }
+    
+    div.innerHTML = `
+      <div class="grid-item-icon ${iconType}">${iconSvg}</div>
+      <div class="grid-item-name">${file.name}</div>
+      ${sizeDisplay ? `<div class="grid-item-size">${sizeDisplay}</div>` : ''}
+    `;
+    
+    return div;
+  }
+  
+  createColumnItem(file, fullPath, stats) {
+    const div = document.createElement('div');
+    div.className = 'column-item';
+    div.dataset.path = fullPath;
+    div.dataset.name = file.name;
+    
+    let iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    let iconSvg = this.getFileIcon(file, fullPath);
+    
+    const isDir = file.isDirectory;
+    const fileSize = stats.size;
+    const isVirtual = stats.isVirtual;
+    
+    let sizeDisplay;
+    if (isVirtual) {
+      sizeDisplay = '无';
+    } else if (isDir) {
+      const cached = this.sizeCache.get(fullPath);
+      if (cached) {
+        if (cached.status === 'virtual') {
+          sizeDisplay = '无';
+        } else if (cached.status === 'ok') {
+          sizeDisplay = '<span class="cached-size">' + cached.text + '</span>';
+        }
+      } else {
+        sizeDisplay = '<button class="column-item-size-btn" data-path="' + fullPath + '">...</button>';
+      }
+    } else {
+      sizeDisplay = fileSize > 0 ? this.formatFileSize(fileSize) : '无';
+    }
+    
+    const date = stats.mtime.toLocaleString('zh-CN');
+    const type = this.getFileType(file.name);
+    
+    div.innerHTML = `
+      <div class="column-item-cell name-cell">
+        <div class="file-item-icon ${iconType}">${iconSvg}</div>
+        <div class="file-item-name">${file.name}</div>
+      </div>
+      <div class="column-item-cell type-cell">${type}</div>
+      <div class="column-item-cell size-cell">${sizeDisplay}</div>
+      <div class="column-item-cell date-cell">${date}</div>
+    `;
+    
+    if (isDir) {
+      const sizeBtn = div.querySelector('.column-item-size-btn');
+      if (sizeBtn) {
+        sizeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const btn = e.target;
+          if (btn.dataset.loading) return;
+          
+          btn.dataset.loading = 'true';
+          btn.textContent = '计算中...';
+          
+          const result = await this.calculateDirectorySize(fullPath);
+          if (result.status === 'virtual') {
+            btn.textContent = '无';
+            this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
+          } else if (result.status === 'error') {
+            btn.textContent = '错误';
+            this.sizeCache.delete(fullPath);
+          } else if (result.status === 'cancelled') {
+            btn.textContent = '查看';
+            this.sizeCache.delete(fullPath);
+          } else {
+            const sizeText = this.formatFileSize(result.size);
+            btn.textContent = sizeText;
+            this.sizeCache.set(fullPath, { status: 'ok', size: result.size, fileCount: result.fileCount, text: sizeText });
+            this.loadDirectory(this.currentPath, true);
+          }
+          delete btn.dataset.loading;
+        });
+      }
+    }
+    
+    return div;
+  }
+  
+  getFileIcon(file, fullPath) {
+    if (file.isDirectory) {
+      return this.icons.folder;
+    }
+    if (fullPath.startsWith('/dev/')) {
+      return this.icons.device;
+    }
+
+    // 正确提取扩展名：
+    // - 有扩展名的文件（如 pagefile.sys、test.tar.gz）取最后一个点后的部分
+    // - 无扩展名的文件（如 Makefile、Dockerfile）ext 为空字符串
+    // - 以点开头的隐藏文件（如 .gitignore、.bashrc）视为无扩展名
+    let ext = '';
+    const name = file.name;
+    if (name && typeof name === 'string') {
+      const lastDot = name.lastIndexOf('.');
+      if (lastDot > 0 && lastDot < name.length - 1) {
+        ext = name.substring(lastDot + 1).toLowerCase();
+      }
+    }
+
+    // Documents
+    if (['pdf'].includes(ext)) return this.icons.filePdf;
+    if (['doc', 'docx', 'docm', 'dotx', 'dotm'].includes(ext)) return this.icons.fileWord;
+    if (['xls', 'xlsx', 'xlsm', 'xltx', 'xltm', 'xlsb'].includes(ext)) return this.icons.fileExcel;
+    if (['ppt', 'pptx', 'pptm', 'potx', 'potm'].includes(ext)) return this.icons.filePpt;
+    if (['txt', 'log', 'text', 'rtf'].includes(ext)) return this.icons.fileTxt;
+    if (['md', 'markdown', 'mdx'].includes(ext)) return this.icons.fileMarkdown;
+    if (['csv', 'tsv'].includes(ext)) return this.icons.fileCsv;
+
+    // Code / Programming
+    if (['js', 'mjs', 'cjs'].includes(ext)) return this.icons.fileJs;
+    if (['ts', 'tsx', 'mts', 'cts'].includes(ext)) return this.icons.fileTs;
+    if (['css', 'scss', 'sass', 'less', 'styl'].includes(ext)) return this.icons.fileCss;
+    if (['html', 'htm', 'xhtml', 'vue', 'svelte'].includes(ext)) return this.icons.fileHtml;
+    if (['py', 'pyw', 'pyx', 'ipynb'].includes(ext)) return this.icons.filePython;
+    if (['json'].includes(ext)) return this.icons.fileJson;
+    if (['xml', 'xsl', 'xslt', 'wsdl'].includes(ext)) return this.icons.fileXml;
+    if (['cpp', 'cxx', 'cc', 'hpp', 'hxx', 'hh'].includes(ext)) return this.icons.fileCpp;
+    if (['c', 'h'].includes(ext)) return this.icons.fileCpp;
+    if (['java', 'jsp', 'jspx'].includes(ext)) return this.icons.fileJava;
+    if (['cs', 'csproj'].includes(ext)) return this.icons.fileCs;
+    if (['go', 'mod'].includes(ext)) return this.icons.fileGo;
+    if (['rs'].includes(ext)) return this.icons.fileRust;
+    if (['php', 'phtml'].includes(ext)) return this.icons.filePhp;
+    if (['sql', 'sqlite', 'db', 'mdb', 'accdb'].includes(ext)) return this.icons.fileSql;
+    if (['sh', 'bash', 'zsh', 'fish', 'ksh'].includes(ext)) return this.icons.fileBash;
+    if (['rb', 'rake'].includes(ext)) return this.icons.fileCode;
+    if (['swift', 'kt', 'scala', 'dart'].includes(ext)) return this.icons.fileCode;
+    if (['yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'config'].includes(ext)) return this.icons.fileConfig;
+
+    // Images
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tiff', 'tif', 'psd', 'heic', 'raw', 'ico'].includes(ext)) return this.icons.fileImage;
+    if (['svg', 'svgz'].includes(ext)) return this.icons.fileSvg;
+
+    // Video
+    if (['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', '3gp'].includes(ext)) return this.icons.fileVideo;
+
+    // Audio
+    if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a', 'opus', 'ape'].includes(ext)) return this.icons.fileAudio;
+
+    // Archive
+    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'zst', 'tgz', 'tbz2'].includes(ext)) return this.icons.fileArchive;
+
+    // Executable / System
+    if (['exe', 'msi', 'com'].includes(ext)) return this.icons.fileExe;
+    if (['dll', 'so', 'dylib'].includes(ext)) return this.icons.fileDll;
+    if (['bat', 'cmd', 'ps1', 'psm1'].includes(ext)) return this.icons.fileBat;
+    if (['sys'].includes(ext)) return this.icons.fileSys;
+    if (['reg'].includes(ext)) return this.icons.fileReg;
+    if (['lnk'].includes(ext)) return this.icons.fileLnk;
+    if (['tmp', 'temp', 'bak'].includes(ext)) return this.icons.file;
+
+    // Database
+    if (['sql', 'db', 'sqlite', 'mdb', 'accdb'].includes(ext)) return this.icons.fileDatabase;
+
+    // Font
+    if (['ttf', 'otf', 'woff', 'woff2', 'eot'].includes(ext)) return this.icons.fileFont;
+
+    // Certificate
+    if (['crt', 'cer', 'pem', 'pfx', 'p12', 'key'].includes(ext)) return this.icons.fileCertificate;
+
+    // Web / Internet
+    if (['url', 'webloc', 'htm', 'html'].includes(ext)) return this.icons.fileWeb;
+
+    // Default
+    return this.icons.file;
+  }
+  
+  async calculateDirectorySize(dirPath) {
+    const isVirtual = await this.vfs.isVirtualPath(dirPath);
+    if (isVirtual) {
+      return { status: 'virtual', size: 0, fileCount: 0 };
+    }
+
+    const winPath = await this.vfs.toWindows(dirPath);
+    if (!winPath) {
+      return { status: 'error', size: 0, fileCount: 0 };
+    }
+
+    const { ipcRenderer } = require('electron');
+
+    const task = this.addTask('size', '计算文件夹大小', { targetPath: dirPath });
+    const dirName = dirPath.split('/').pop();
+    this.updateTask(task.id, {
+      currentFile: '正在统计大小...',
+      indeterminate: true
+    });
+    
+    // 监听进度（按 taskId 过滤）
+    const onProgress = (_, data) => {
+      if (data.taskId !== task.id) return;
+      this.updateTask(task.id, {
+        progress: data.progress || 0,
+        totalFiles: data.totalFiles || 0,
+        completedFiles: data.completedFiles || 0,
+        completedSize: data.completedSize || 0,
+        currentFile: data.currentFile || '',
+        indeterminate: !!data.indeterminate
+      });
+    };
+    ipcRenderer.on('calc-size-progress', onProgress);
+
+    try {
+      const result = await ipcRenderer.invoke('calc-size', {
+        dirPath: winPath,
+        taskId: task.id
+      });
+      ipcRenderer.removeListener('calc-size-progress', onProgress);
+
+      if (result.status === 'ok') {
+        this.updateTask(task.id, {
+          completedFiles: result.fileCount,
+          completedSize: result.size,
+          progress: 100,
+          indeterminate: false
+        });
+        this.completeTask(task.id);
+        return { status: 'ok', size: result.size, fileCount: result.fileCount };
+      } else if (result.status === 'cancelled') {
+        this.cancelTask(task.id);
+        return { status: 'cancelled', size: 0, fileCount: 0 };
+      } else {
+        this.updateTask(task.id, {
+          status: 'error',
+          currentFile: '计算失败',
+          indeterminate: false
+        });
+        return { status: 'error', size: 0, fileCount: 0 };
+      }
+    } catch (err) {
+      ipcRenderer.removeListener('calc-size-progress', onProgress);
+      this.updateTask(task.id, {
+        status: 'error',
+        currentFile: '计算失败: ' + (err.message || ''),
+        indeterminate: false
+      });
+      return { status: 'error', size: 0, fileCount: 0 };
+    }
+  }
+
+  // 快速计算子文件夹大小（带超时，不进任务面板，用于进入文件夹时自动计算）
+  async calcSizeWithTimeout(dirPath, timeoutMs = 500) {
+    const isVirtual = await this.vfs.isVirtualPath(dirPath);
+    if (isVirtual) {
+      return { status: 'virtual', size: 0, fileCount: 0 };
+    }
+    const winPath = await this.vfs.toWindows(dirPath);
+    if (!winPath) {
+      return { status: 'error', size: 0, fileCount: 0 };
+    }
+
+    const { ipcRenderer } = require('electron');
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve({ status: 'timeout' });
+      }, timeoutMs);
+
+      ipcRenderer.invoke('calc-size-quick', { dirPath: winPath, timeoutMs })
+        .then(result => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(result);
+        })
+        .catch(() => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve({ status: 'error' });
+        });
+    });
+  }
+
+  // 进入文件夹后自动计算所有子文件夹大小（500ms 超时）
+  async autoCalcSubfolderSizes(fileData, loadToken) {
+    const subdirs = fileData.filter(({ file, stats }) =>
+      file.isDirectory && !stats.isVirtual
+    );
+
+    if (subdirs.length === 0) return;
+
+    // 记录发起时的路径，完成后验证是否仍然匹配（防止竞态）
+    const calcPath = this.currentPath;
+
+    // 并发启动，每个 500ms 超时
+    const results = await Promise.allSettled(
+      subdirs.map(({ fullPath }) => this.calcSizeWithTimeout(fullPath, 500))
+    );
+
+    // 如果 loadToken 已过期（用户已发起新的 loadDirectory），放弃更新
+    if (loadToken !== undefined && this._loadToken !== loadToken) return;
+    
+    // 如果用户已导航到其他路径，放弃更新
+    if (this.currentPath !== calcPath) return;
+
+    // 收集所有面板中的按钮（左侧和右侧）
+    const fileLists = [
+      document.getElementById('file-list-left'),
+      document.getElementById('file-list-right')
+    ].filter(el => el);
+    
+    const gridContainers = [
+      document.getElementById('grid-container-left'),
+      document.getElementById('grid-container-right')
+    ].filter(el => el);
+    
+    const allSizeBtns = [];
+    fileLists.forEach(list => {
+      allSizeBtns.push(...list.querySelectorAll('.file-item-size-btn'));
+    });
+    gridContainers.forEach(grid => {
+      allSizeBtns.push(...grid.querySelectorAll('.file-item-size-btn'));
+    });
+    
+    results.forEach((result, i) => {
+      const { fullPath } = subdirs[i];
+      const matchingBtns = allSizeBtns.filter(btn => btn.dataset.path === fullPath);
+      
+      if (matchingBtns.length === 0) return;
+      
+      matchingBtns.forEach(sizeBtn => {
+        // 如果用户已经手动点击了按钮（正在计算中），不要覆盖
+        if (sizeBtn.dataset.loading) return;
+        
+        if (result.status === 'fulfilled' && result.value.status === 'ok') {
+          const sizeText = this.formatFileSize(result.value.size);
+          sizeBtn.textContent = sizeText;
+          sizeBtn.classList.add('auto-calculated');
+        } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+          sizeBtn.textContent = '无';
+        } else {
+          // 超时或失败，改为"查看"让用户可以手动触发
+          sizeBtn.textContent = '查看';
+        }
+      });
+      
+      // 缓存结果
+      if (result.status === 'fulfilled' && result.value.status === 'ok') {
+        const sizeText = this.formatFileSize(result.value.size);
+        this.sizeCache.set(fullPath, { status: 'ok', size: result.value.size, fileCount: result.value.fileCount, text: sizeText });
+      } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+        this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
+      }
+    });
+  }
+  
+  // 右侧面板自动计算文件夹大小
+  async autoCalcRightPanelSizes(fileData, loadToken) {
+    const subdirs = fileData.filter(({ file, stats }) =>
+      file.isDirectory && !stats.isVirtual
+    );
+
+    if (subdirs.length === 0) return;
+
+    // 并发启动，每个 500ms 超时
+    const results = await Promise.allSettled(
+      subdirs.map(({ fullPath }) => this.calcSizeWithTimeout(fullPath, 500))
+    );
+
+    // 只收集右侧面板的按钮
+    const rightList = document.getElementById('file-list-right');
+    const rightGrid = document.getElementById('grid-container-right');
+    
+    const rightSizeBtns = [];
+    if (rightList) {
+      rightSizeBtns.push(...rightList.querySelectorAll('.file-item-size-btn'));
+    }
+    if (rightGrid) {
+      rightSizeBtns.push(...rightGrid.querySelectorAll('.file-item-size-btn'));
+    }
+    
+    results.forEach((result, i) => {
+      const { fullPath } = subdirs[i];
+      const matchingBtns = rightSizeBtns.filter(btn => btn.dataset.path === fullPath);
+      
+      if (matchingBtns.length === 0) return;
+      
+      matchingBtns.forEach(sizeBtn => {
+        // 如果用户已经手动点击了按钮（正在计算中），不要覆盖
+        if (sizeBtn.dataset.loading) return;
+        
+        if (result.status === 'fulfilled' && result.value.status === 'ok') {
+          const sizeText = this.formatFileSize(result.value.size);
+          sizeBtn.textContent = sizeText;
+          sizeBtn.classList.add('auto-calculated');
+        } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+          sizeBtn.textContent = '无';
+        } else {
+          // 超时或失败，改为"查看"让用户可以手动触发
+          sizeBtn.textContent = '查看';
+        }
+      });
+      
+      // 缓存结果（左右面板共享缓存）
+      if (result.status === 'fulfilled' && result.value.status === 'ok') {
+        const sizeText = this.formatFileSize(result.value.size);
+        this.sizeCache.set(fullPath, { status: 'ok', size: result.value.size, fileCount: result.value.fileCount, text: sizeText });
+      } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+        this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
+      }
+    });
+  }
+  
+  formatFileSize(bytes) {
+    if (bytes === null || bytes === undefined || isNaN(bytes)) return '无';
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+  
+  getFileType(name) {
+    const dotIndex = name.lastIndexOf('.');
+    const ext = dotIndex !== -1 ? name.substr(dotIndex).toLowerCase() : '';
+    const types = {
+      '.txt': '文本文件',
+      '.md': 'Markdown文件',
+      '.js': 'JavaScript文件',
+      '.ts': 'TypeScript文件',
+      '.html': 'HTML文件',
+      '.css': 'CSS文件',
+      '.json': 'JSON文件',
+      '.png': 'PNG图片',
+      '.jpg': 'JPEG图片',
+      '.jpeg': 'JPEG图片',
+      '.gif': 'GIF图片',
+      '.svg': 'SVG图片',
+      '.pdf': 'PDF文档',
+      '.doc': 'Word文档',
+      '.docx': 'Word文档',
+      '.xls': 'Excel表格',
+      '.xlsx': 'Excel表格',
+      '.ppt': 'PowerPoint演示',
+      '.pptx': 'PowerPoint演示',
+      '.zip': '压缩文件',
+      '.rar': 'RAR压缩文件',
+      '.7z': '7z压缩文件',
+      '.exe': '可执行文件',
+      '.dll': '动态链接库',
+      '.bat': '批处理文件',
+      '.cmd': '命令文件',
+    };
+    return types[ext] || '文件';
+  }
+  
+  handleFileClick(item, e) {
+    if (e.ctrlKey || e.metaKey) {
+      if (item.dataset.selected === 'true') {
+        delete item.dataset.selected;
+        this.selectedItems = this.selectedItems.filter(p => p !== item.dataset.path);
+      } else {
+        item.dataset.selected = 'true';
+        this.selectedItems.push(item.dataset.path);
+      }
+    } else {
+      this.deselectAll();
+      item.dataset.selected = 'true';
+      this.selectedItems = [item.dataset.path];
+    }
+    
+    this.updateInfoPanel(item.dataset.path);
+  }
+  
+  async handleFileDoubleClick(item) {
+    const fullPath = item.dataset.path;
+    try {
+      if (fullPath.startsWith('/dev/')) {
+        this.openFile(fullPath);
+        return;
+      }
+      
+      const stats = await this.vfs.stat(fullPath);
+      
+      if (stats && stats.isDirectory()) {
+        // 检查点击的是哪个面板的文件项
+        const parentList = item.closest('.file-list');
+        const parentGrid = item.closest('.grid-container');
+        const isRightPanel = (parentList && parentList.id === 'file-list-right') || 
+                            (parentGrid && parentGrid.id === 'grid-container-right');
+        
+        if (isRightPanel) {
+          // 右侧面板双击文件夹，更新右侧
+          this.loadRightPanel(fullPath);
+        } else {
+          // 左侧面板双击文件夹，更新左侧
+          this.loadDirectory(fullPath);
+        }
+      } else {
+        this.openFile(fullPath);
+      }
+    } catch (err) {
+      console.error('handleFileDoubleClick error:', err);
+      this.showDialog('错误', `无法访问文件: ${err.message}`, 'error');
+    }
+  }
+  
+  async openFile(filePath) {
+    if (filePath.startsWith('/dev/')) {
+      this.showDialog('提示', '该设备文件的打开方式暂未实现', 'info');
+      return;
+    }
+    
+    const winPath = await this.vfs.toWindows(filePath);
+    const { shell } = require('electron');
+    shell.openPath(winPath || filePath).catch(err => {
+      console.error('Failed to open file:', err);
+      this.showDialog('错误', `无法打开文件: ${err.message}`, 'error');
+    });
+  }
+  
+  goBack() {
+    const tabState = this.tabs[this.currentTabId];
+    if (!tabState) return;
+    
+    if (tabState.historyIndex > 0) {
+      tabState.historyIndex--;
+      this.loadDirectory(tabState.history[tabState.historyIndex]);
+    }
+  }
+  
+  goForward() {
+    const tabState = this.tabs[this.currentTabId];
+    if (!tabState) return;
+    
+    if (tabState.historyIndex < tabState.history.length - 1) {
+      tabState.historyIndex++;
+      this.loadDirectory(tabState.history[tabState.historyIndex]);
+    }
+  }
+  
+  goUp() {
+    const parentDir = this.getParentPath(this.currentPath);
+    if (parentDir !== this.currentPath) {
+      this.loadDirectory(parentDir);
+    }
+  }
+  
+  goHome() {
+    this.showHome();
+  }
+  
+  showHome() {
+    console.log('showHome() called');
+    
+    this.currentPath = 'computer://mainmenu';
+    
+    const tabState = this.tabs[this.currentTabId];
+    if (tabState) {
+      tabState.path = 'computer://mainmenu';
+      tabState.history = ['computer://mainmenu'];
+      tabState.historyIndex = 0;
+    }
+    
+    const homePage = document.getElementById('home-page');
+    const fileBrowserContent = document.getElementById('file-browser-content');
+    const tabBar = document.querySelector('.tab-bar');
+    const fileBrowserToolbar = document.querySelector('.file-browser-toolbar');
+    const fileBrowserStatusBar = document.getElementById('file-browser-status-bar');
+    const navigatorToolbar = document.querySelector('.navigator-toolbar-actions');
+    
+    console.log('showHome: homePage element:', homePage);
+    
+    if (homePage) homePage.classList.remove('is-hidden');
+    if (fileBrowserContent) fileBrowserContent.classList.add('is-hidden');
+    if (tabBar) tabBar.classList.remove('is-hidden');
+    if (fileBrowserToolbar) fileBrowserToolbar.classList.remove('is-hidden');
+    if (fileBrowserStatusBar) fileBrowserStatusBar.classList.add('is-hidden');
+    if (navigatorToolbar) navigatorToolbar.classList.add('is-hidden');
+    
+    const tab = document.querySelector(`[data-tab-id="${this.currentTabId}"]`);
+    if (tab) {
+      const label = tab.querySelector('.tab-label');
+      if (label) {
+        label.textContent = '主菜单';
+      }
+    }
+    
+    if (this.addressBarInput) {
+      this.addressBarInput.value = 'computer://mainmenu';
+    }
+    
+    console.log('showHome: calling renderUserDirectories()');
+    this.renderUserDirectories();
+    
+    console.log('showHome: calling renderDrives()');
+    this.renderDrives();
+  }
+  
+  showFileBrowser() {
+    const homePage = document.getElementById('home-page');
+    const fileBrowserContent = document.getElementById('file-browser-content');
+    const addressBar = document.querySelector('.file-browser-address-bar');
+    const tabBar = document.querySelector('.tab-bar');
+    const fileBrowserToolbar = document.querySelector('.file-browser-toolbar');
+    const fileBrowserStatusBar = document.getElementById('file-browser-status-bar');
+    const navigatorToolbar = document.querySelector('.navigator-toolbar-actions');
+    
+    if (homePage) homePage.classList.add('is-hidden');
+    if (fileBrowserContent) fileBrowserContent.classList.remove('is-hidden');
+    if (addressBar) addressBar.classList.remove('is-hidden');
+    if (tabBar) tabBar.classList.remove('is-hidden');
+    if (fileBrowserToolbar) fileBrowserToolbar.classList.remove('is-hidden');
+    if (fileBrowserStatusBar) fileBrowserStatusBar.classList.remove('is-hidden');
+    if (navigatorToolbar) navigatorToolbar.classList.remove('is-hidden');
+  }
+  
+  renderUserDirectories() {
+    const grid = document.getElementById('user-directories-grid');
+    if (!grid) return;
+    
+    const homeDir = this.os.homedir();
+    const directories = [
+      { name: '首页', path: '/home', icon: 'home' },
+      { name: '桌面', path: this.vfs.toUnix(homeDir + '\\Desktop'), icon: 'desktop' },
+      { name: '下载', path: this.vfs.toUnix(homeDir + '\\Downloads'), icon: 'download' },
+      { name: '文件', path: this.vfs.toUnix(homeDir + '\\Documents'), icon: 'folder' },
+      { name: '图片', path: this.vfs.toUnix(homeDir + '\\Pictures'), icon: 'image' },
+      { name: '视频', path: this.vfs.toUnix(homeDir + '\\Videos'), icon: 'video' },
+      { name: '音乐', path: this.vfs.toUnix(homeDir + '\\Music'), icon: 'music' },
+    ];
+    
+    grid.innerHTML = directories.map(dir => `
+      <div class="user-directory-card" data-path="${dir.path}">
+        <div class="user-directory-card__icon">
+          ${this.getDirectoryIcon(dir.icon)}
+        </div>
+        <div class="user-directory-card__info">
+          <div class="user-directory-card__name">${dir.name}</div>
+          <div class="user-directory-card__path">${dir.path}</div>
+        </div>
+      </div>
+    `).join('');
+    
+    grid.querySelectorAll('.user-directory-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const path = card.dataset.path;
+        this.loadDirectory(path);
+      });
+    });
+  }
+  
+  getDirectoryIcon(iconName) {
+    const icons = {
+      home: this.icons.home,
+      desktop: this.icons.desktop,
+      download: this.icons.download,
+      folder: this.icons.folder,
+      image: this.icons.image,
+      video: this.icons.video,
+      music: this.icons.music,
+    };
+    return icons[iconName] || icons.folder;
+  }
+  
+  renderDrives() {
+    const grid = document.getElementById('drives-grid');
+    if (!grid) return;
+    
+    let drives = [{
+      name: 'root',
+      path: '/',
+      type: 'virtual',
+    }];
+    
+    const driveCards = drives.map(drive => {
+      const usage = drive.type === 'virtual' ? null : this.getDriveUsage(drive.path);
+      let iconSvg = '';
+      
+      if (drive.name === 'root') {
+        iconSvg = this.icons.desktop;
+      } else if (drive.type === 'wsl') {
+        iconSvg = this.icons.folder;
+      } else {
+        iconSvg = this.icons.disk;
+      }
+      
+      return `
+        <div class="drive-card" data-path="${drive.path}">
+          <div class="drive-card__header">
+            <div class="drive-card__icon">
+              ${iconSvg}
+            </div>
+            <div class="drive-card__info">
+              <div class="drive-card__name">${drive.name}</div>
+              <div class="drive-card__path">${drive.path}</div>
+            </div>
+          </div>
+          ${usage ? `
+            <div class="drive-card__progress">
+              <div class="drive-card__progress-bar">
+                <div class="drive-card__progress-fill" style="width: ${usage.percent}%"></div>
+              </div>
+              <div class="drive-card__progress-text">${usage.used} GB / ${usage.total} GB</div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+    
+    grid.innerHTML = driveCards;
+      
+    grid.querySelectorAll('.drive-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const path = card.dataset.path;
+        this.loadDirectory(path);
+      });
+    });
+    
+    this.loadDrivesAsync();
+  }
+  
+  async loadDrivesAsync() {
+    // 防止并发调用导致重复
+    if (this._loadingDrives) return;
+    this._loadingDrives = true;
+    
+    try {
+      const mediaResult = await this.vfs.amsysClient.listDir('/media');
+      if (mediaResult.success && mediaResult.entries) {
+        const grid = document.getElementById('drives-grid');
+        if (!grid) {
+          this._loadingDrives = false;
+          return;
+        }
+        
+        // 清除之前添加的盘符（保留 root 卡片）
+        grid.querySelectorAll('.drive-card:not([data-path="/"])').forEach(el => el.remove());
+        
+        const sortedEntries = mediaResult.entries.filter(e => e.type === 'dir').sort((a, b) => {
+          return a.name.localeCompare(b.name);
+        });
+        
+        sortedEntries.forEach(entry => {
+          const driveCard = document.createElement('div');
+          driveCard.className = 'drive-card';
+          driveCard.dataset.path = '/media/' + entry.name;
+          driveCard.innerHTML = `
+            <div class="drive-card__header">
+              <div class="drive-card__icon">
+                ${this.icons.disk}
+              </div>
+              <div class="drive-card__info">
+                <div class="drive-card__name">${entry.name.toUpperCase()} 盘</div>
+                <div class="drive-card__path">/media/${entry.name}</div>
+              </div>
+            </div>
+          `;
+          driveCard.addEventListener('click', () => {
+            this.loadDirectory(driveCard.dataset.path);
+          });
+          grid.appendChild(driveCard);
+        });
+      }
+    } catch (err) {
+      console.error('loadDrivesAsync error:', err);
+    } finally {
+      this._loadingDrives = false;
+    }
+  }
+  
+  getSystemDrives() {
+    const drives = [];
+    
+    console.log('getSystemDrives: vfs mounts:', this.vfs.getMounts());
+    console.log('getSystemDrives: vfs root:', this.vfs.getRoot());
+    
+    const rootMount = {
+      name: 'root',
+      path: '/',
+      type: 'virtual',
+    };
+    drives.push(rootMount);
+    
+    if (process.platform === 'win32') {
+      const { execSync } = require('child_process');
+      try {
+        const output = execSync('wmic logicaldisk get caption,description /format:csv', { encoding: 'utf-8' });
+        const lines = output.split('\n').filter(line => line.trim());
+        
+        lines.forEach(line => {
+          const parts = line.split(',');
+          if (parts.length >= 2) {
+            const caption = parts[0].trim();
+            const description = parts[1].trim();
+            if (caption && caption.length === 2 && caption.endsWith(':')) {
+              const unixPath = this.vfs.toUnix(`${caption}\\`);
+              console.log(`getSystemDrives: ${caption}\\ -> ${unixPath}`);
+              drives.push({
+                name: `${description} (${caption})`,
+                path: unixPath,
+                type: 'local',
+              });
+            }
+          }
+        });
+      } catch (err) {
+        for (let i = 67; i <= 90; i++) {
+          const letter = String.fromCharCode(i);
+          const path = `${letter}:`;
+          try {
+            this.fs.statSync(path);
+            const unixPath = this.vfs.toUnix(`${letter}:\\`);
+            console.log(`getSystemDrives (fallback): ${letter}:\\ -> ${unixPath}`);
+            drives.push({
+              name: `${letter}盘`,
+              path: unixPath,
+              type: 'local',
+            });
+          } catch (e) {
+          }
+        }
+      }
+      
+      try {
+        const wslOutput = execSync('wsl --list --quiet', { encoding: 'utf-8', timeout: 3000 });
+        const wslLines = wslOutput.split('\n').filter(line => line.trim());
+        wslLines.forEach(line => {
+          drives.push({
+            name: line.trim(),
+            path: this.vfs.toUnix(`\\\\wsl.localhost\\${line.trim()}`),
+            type: 'wsl',
+          });
+        });
+      } catch (e) {
+      }
+    } else {
+      const rootPaths = ['/', '/home', '/mnt'];
+      rootPaths.forEach(path => {
+        try {
+          this.fs.statSync(path);
+          drives.push({
+            name: path === '/' ? '根目录' : path,
+            path: path,
+            type: 'local',
+          });
+        } catch (e) {
+        }
+      });
+    }
+    
+    return drives;
+  }
+  
+  getDriveUsage(path) {
+    try {
+      const { execSync } = require('child_process');
+      if (process.platform === 'win32') {
+        const output = execSync(`wmic logicaldisk where caption="${path.charAt(0)}:" get freespace,size /format:csv`, { encoding: 'utf-8' });
+        const lines = output.split('\n').filter(line => line.trim());
+        if (lines.length >= 2) {
+          const parts = lines[1].split(',');
+          if (parts.length >= 2) {
+            const freeSpace = parseInt(parts[0].trim());
+            const totalSize = parseInt(parts[1].trim());
+            if (!isNaN(freeSpace) && !isNaN(totalSize) && totalSize > 0) {
+              const used = totalSize - freeSpace;
+              return {
+                used: (used / (1024 * 1024 * 1024)).toFixed(1),
+                total: (totalSize / (1024 * 1024 * 1024)).toFixed(1),
+                percent: Math.round((used / totalSize) * 100),
+              };
+            }
+          }
+        }
+      } else {
+        const output = execSync(`df -k "${path}"`, { encoding: 'utf-8' });
+        const lines = output.split('\n').filter(line => line.trim());
+        if (lines.length >= 2) {
+          const parts = lines[1].split(/\s+/);
+          if (parts.length >= 5) {
+            const used = parseInt(parts[2]) * 1024;
+            const total = parseInt(parts[1]) * 1024;
+            return {
+              used: (used / (1024 * 1024 * 1024)).toFixed(1),
+              total: (total / (1024 * 1024 * 1024)).toFixed(1),
+              percent: Math.round((used / total) * 100),
+            };
+          }
+        }
+      }
+    } catch (err) {
+    }
+    return null;
+  }
+  
+  refresh() {
+    this.loadDirectory(this.currentPath);
+  }
+  
+  async navigateTo(path) {
+    try {
+      const stats = await this.vfs.stat(path);
+      const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
+      if (isDir) {
+        this.loadDirectory(path);
+      }
+    } catch (err) {
+      this.showDialog('错误', `路径不存在: ${path}`, 'error');
+    }
+  }
+  
+  editAddressBar() {
+    this.addressBarInput.readOnly = false;
+    this.addressBarInput.select();
+    this.addressBarInput.focus();
+  }
+  
+  updateHistory(path) {
+    const tabState = this.tabs[this.currentTabId];
+    if (!tabState) return;
+    
+    const { history, historyIndex } = tabState;
+    
+    if (history[historyIndex] !== path) {
+      tabState.history = history.slice(0, historyIndex + 1);
+      tabState.history.push(path);
+      tabState.historyIndex = tabState.history.length - 1;
+    }
+  }
+  
+  updateNavigationButtons() {
+    const backBtn = document.getElementById('browser-back-btn');
+    const forwardBtn = document.getElementById('browser-forward-btn');
+    const upBtn = document.getElementById('browser-up-btn');
+    
+    if (!backBtn || !forwardBtn || !upBtn) return;
+    
+    const tabState = this.tabs[this.currentTabId];
+    const historyIndex = tabState?.historyIndex || 0;
+    const historyLength = tabState?.history?.length || 1;
+    
+    backBtn.disabled = historyIndex <= 0;
+    forwardBtn.disabled = historyIndex >= historyLength - 1;
+    
+    const parentDir = this.getParentPath(this.currentPath);
+    upBtn.disabled = parentDir === this.currentPath;
+    
+    if (this.navBackBtn) this.navBackBtn.disabled = backBtn.disabled;
+    if (this.navForwardBtn) this.navForwardBtn.disabled = forwardBtn.disabled;
+    if (this.navUpBtn) this.navUpBtn.disabled = upBtn.disabled;
+  }
+  
+  updateStatusBar(count) {
+    if (this.statusText) {
+      this.statusText.textContent = `${count} 个项目`;
+    } else {
+      const statusTextEl = document.querySelector('.status-text');
+      if (statusTextEl) {
+        statusTextEl.textContent = `${count} 个项目`;
+      }
+    }
+  }
+  
+  selectAll() {
+    this.deselectAll();
+    document.querySelectorAll('.file-item, .grid-item').forEach(item => {
+      item.classList.add('selected');
+      this.selectedItems.push(item.dataset.path);
+    });
+    document.querySelectorAll('.column-item').forEach(item => {
+      item.dataset.selected = 'true';
+      this.selectedItems.push(item.dataset.path);
+    });
+  }
+  
+  deselectAll() {
+    document.querySelectorAll('.file-item, .grid-item').forEach(item => {
+      item.classList.remove('selected');
+    });
+    document.querySelectorAll('.column-item').forEach(item => {
+      delete item.dataset.selected;
+    });
+    this.selectedItems = [];
+  }
+  
+  createNewFile() {
+    this.showDialog('新建文件', '<input type="text" id="new-file-name" placeholder="文件名" value="新建文件.txt">', 'input', async (name) => {
+      if (!name) return;
+      
+      const fullPath = this.joinPath(this.currentPath, name);
+      
+      if (await this.vfs.exists(fullPath)) {
+        this.showDialog('错误', '文件已存在', 'error');
+        return;
+      }
+      
+      const winPath = await this.vfs.toWindows(fullPath);
+      if (winPath) {
+        const fs = require('fs');
+        fs.writeFileSync(winPath, '');
+        this.refresh();
+        
+        const item = document.querySelector(`[data-path="${fullPath}"]`);
+        if (item) {
+          item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      } else {
+        this.showDialog('错误', '无法创建文件', 'error');
+      }
+    });
+  }
+  
+  createNewFolder() {
+    this.showDialog('新建文件夹', '<input type="text" id="new-folder-name" placeholder="文件夹名称" value="新建文件夹">', 'input', (name) => {
+      if (!name) return;
+      
+      const fullPath = this.joinPath(this.currentPath, name);
+      
+      if (this.vfs.exists(fullPath)) {
+        this.showDialog('错误', '文件夹已存在', 'error');
+        return;
+      }
+      
+      if (this.vfs.mkdir(fullPath)) {
+        this.refresh();
+        
+        const item = document.querySelector(`[data-path="${fullPath}"]`);
+        if (item) {
+          item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      } else {
+        this.showDialog('错误', '无法创建文件夹', 'error');
+      }
+    });
+  }
+  
+  initContextMenu() {
+    this.contextMenu = document.getElementById('context-menu');
+    this.contextMenuContent = this.contextMenu.querySelector('.context-menu-content');
+    
+    document.addEventListener('click', () => {
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-open').addEventListener('click', () => {
+      if (this.selectedItems.length > 0) {
+        this.handleFileDoubleClick(document.querySelector(`[data-path="${this.selectedItems[0]}"]`));
+      }
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-open-in-new-tab').addEventListener('click', () => {
+      if (this.selectedItems.length > 0) {
+        const path = this.selectedItems[0];
+        try {
+          const stats = this.fs.statSync(path);
+          if (stats.isDirectory()) {
+            this.createNewTab(path);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      this.hideContextMenu();
+    });
+    
+    const submenu = document.querySelector('.context-menu-submenu');
+    const submenuContent = document.getElementById('ctx-more-options-content');
+    const moreOptionsBtn = document.getElementById('ctx-more-options');
+    
+    submenu.addEventListener('mouseenter', async () => {
+      const submenuBtn = submenu.querySelector('.context-menu-item');
+      if (submenuBtn) {
+        const rect = submenuBtn.getBoundingClientRect();
+        const submenuWidth = 300;
+        
+        if (rect.right + submenuWidth > window.innerWidth) {
+          submenuContent.style.left = 'auto';
+          submenuContent.style.right = 'calc(100% - 4px)';
+        } else {
+          submenuContent.style.left = 'calc(100% - 4px)';
+          submenuContent.style.right = 'auto';
+        }
+      }
+      
+      if (this.selectedItems.length > 0 && !this.shellMenuLoaded) {
+        submenuContent.innerHTML = '<button class="context-menu-item"><span class="icon-wrapper"></span><span>加载中...</span></button>';
+        
+        const path = this.selectedItems[0];
+        try {
+          const winPath = await this.vfs.toWindows(path);
+          if (winPath) {
+            await this.populateShellMenu(winPath);
+          }
+        } catch (err) {
+          console.error(err);
+          submenuContent.innerHTML = '<button class="context-menu-item"><span class="icon-wrapper"></span><span>加载失败</span></button>';
+        }
+      }
+    });
+    
+    moreOptionsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      submenu.classList.toggle('submenu-pinned');
+    });
+    
+    document.getElementById('ctx-copy').addEventListener('click', () => {
+      this.copyMode = 'copy';
+      this.copyBuffer = [...this.selectedItems];
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-cut').addEventListener('click', () => {
+      this.copyMode = 'cut';
+      this.copyBuffer = [...this.selectedItems];
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-paste').addEventListener('click', () => {
+      this.pasteItems();
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-rename').addEventListener('click', () => {
+      if (this.selectedItems.length === 1) {
+        this.renameItem(this.selectedItems[0]);
+      }
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-delete').addEventListener('click', () => {
+      if (this.selectedItems.length > 0) {
+        this.showDialog('确认删除', `确定要删除 ${this.selectedItems.length} 个项目吗？`, 'confirm', () => {
+          this.deleteItems();
+        });
+      }
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-properties').addEventListener('click', () => {
+      if (this.selectedItems.length === 1) {
+        const path = this.selectedItems[0];
+        this.updateInfoPanel(path);
+        this.showInfoPanel();
+      }
+      this.hideContextMenu();
+    });
+  }
+  
+  async showContextMenu(x, y, item) {
+    this.shellMenuLoaded = false;
+    const pasteBtn = document.getElementById('ctx-paste');
+    if (pasteBtn) {
+      pasteBtn.disabled = this.copyBuffer.length === 0;
+    }
+    
+    const openInNewTabBtn = document.getElementById('ctx-open-in-new-tab');
+    if (item && openInNewTabBtn) {
+      const path = item.dataset.path;
+      try {
+        const stats = await this.vfs.stat(path);
+        const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
+        openInNewTabBtn.style.display = isDir ? 'flex' : 'none';
+      } catch {
+        openInNewTabBtn.style.display = 'none';
+      }
+    } else {
+      openInNewTabBtn.style.display = 'none';
+    }
+    
+    const moreOptionsBtn = document.getElementById('ctx-more-options');
+    if (item) {
+      const path = item.dataset.path;
+      try {
+        const isVirtual = await this.vfs.isVirtualPath(path);
+        moreOptionsBtn.style.display = isVirtual ? 'none' : 'flex';
+      } catch {
+        moreOptionsBtn.style.display = 'none';
+      }
+    } else {
+      moreOptionsBtn.style.display = 'none';
+    }
+    
+    this.contextMenu.classList.add('active');
+    
+    if (item) {
+      item.classList.add('selected');
+      this.selectedItems = [item.dataset.path];
+    } else {
+      this.deselectAll();
+    }
+    
+    const menuWidth = this.contextMenuContent.offsetWidth;
+    const menuHeight = this.contextMenuContent.offsetHeight;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+    
+    let finalX = x;
+    let finalY = y;
+    
+    if (finalX + menuWidth > windowWidth) {
+      finalX = windowWidth - menuWidth - 4;
+    }
+    if (finalY + menuHeight > windowHeight) {
+      finalY = windowHeight - menuHeight - 4;
+    }
+    
+    finalX = Math.max(4, finalX);
+    finalY = Math.max(4, finalY);
+    
+    this.contextMenuContent.style.left = finalX + 'px';
+    this.contextMenuContent.style.top = finalY + 'px';
+  }
+  
+  async populateShellMenu(winPath) {
+    const submenuContent = document.getElementById('ctx-more-options-content');
+    
+    submenuContent.innerHTML = '<button class="context-menu-item"><span class="icon-wrapper"></span><span>加载中...</span></button>';
+    
+    try {
+      const { exec } = require('child_process');
+      const fs = require('fs');
+      const path = require('path');
+      const util = require('util');
+      const execPromise = util.promisify(exec);
+      
+      const tempDir = require('os').tmpdir();
+      const tempFile = path.join(tempDir, `shell_menu_${Date.now()}.ps1`);
+      
+      const escapedPath = winPath.replace(/'/g, "''").replace(/\\/g, "\\\\");
+      
+      const psScript = `
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+        
+        $filePath = '${escapedPath}'
+        Write-Host "DEBUG: filePath = $filePath"
+        
+        if (-not (Test-Path $filePath)) {
+            Write-Host "ERROR: Path does not exist"
+            exit 1
+        }
+        
+        $shell = New-Object -ComObject Shell.Application
+        $parentDir = Split-Path -Path $filePath -Parent
+        $fileName = Split-Path -Path $filePath -Leaf
+        
+        Write-Host "DEBUG: parentDir = $parentDir"
+        Write-Host "DEBUG: fileName = $fileName"
+        
+        if (-not $parentDir) {
+            $parentDir = 'C:\\'
+        }
+        
+        $folder = $shell.Namespace($parentDir)
+        if (-not $folder) {
+            Write-Host "ERROR: Cannot get folder"
+            exit 1
+        }
+        
+        $item = $folder.ParseName($fileName)
+        
+        if (-not $item) {
+            Write-Host "ERROR: Cannot get item"
+            exit 1
+        }
+        
+        $verbs = $item.Verbs()
+        Write-Host "DEBUG: Found $($verbs.Count) verbs"
+        
+        if ($verbs) {
+            $verbs | ForEach-Object {
+                $_.Name -replace '&', ''
+            }
+        }
+      `;
+      
+      fs.writeFileSync(tempFile, psScript, 'utf8');
+      
+      const { stdout, stderr } = await execPromise(`powershell -ExecutionPolicy Bypass -File "${tempFile}"`, {
+        timeout: 10000
+      });
+      
+      fs.unlinkSync(tempFile);
+      
+      console.log('populateShellMenu stdout:', stdout);
+      if (stderr) {
+        console.log('populateShellMenu stderr:', stderr);
+      }
+      
+      const lines = stdout.split('\n').filter(v => v.trim());
+      const verbs = lines.filter(v => !v.startsWith('DEBUG:') && !v.startsWith('ERROR:'));
+      
+      submenuContent.innerHTML = '';
+      
+      if (verbs.length === 0) {
+        const noVerbBtn = document.createElement('button');
+        noVerbBtn.className = 'context-menu-item';
+        noVerbBtn.innerHTML = '<span class="icon-wrapper"></span><span>没有其他选项</span>';
+        submenuContent.appendChild(noVerbBtn);
+        return;
+      }
+      
+      this.shellMenuLoaded = true;
+      
+      verbs.forEach((verb, index) => {
+        const btn = document.createElement('button');
+        btn.className = 'context-menu-item';
+        btn.innerHTML = '<span class="icon-wrapper"></span><span>' + verb.trim() + '</span>';
+        btn.addEventListener('click', () => {
+          this.executeShellVerb(winPath, verb.trim());
+          this.hideContextMenu();
+        });
+        submenuContent.appendChild(btn);
+      });
+      
+    } catch (err) {
+      console.error('populateShellMenu error:', err.message, err.stderr, err.stdout);
+      submenuContent.innerHTML = '';
+      const errorBtn = document.createElement('button');
+      errorBtn.className = 'context-menu-item';
+      errorBtn.innerHTML = `<span>错误: ${err.message.substring(0, 30)}...</span>`;
+      submenuContent.appendChild(errorBtn);
+    }
+  }
+  
+  async executeShellVerb(winPath, verb) {
+    try {
+      const { exec } = require('child_process');
+      const fs = require('fs');
+      const path = require('path');
+      
+      const tempDir = require('os').tmpdir();
+      const tempFile = path.join(tempDir, `shell_execute_${Date.now()}.ps1`);
+      
+      const psScript = `
+        $filePath = '${winPath.replace(/'/g, "''")}'
+        $verbName = '${verb.replace(/'/g, "''")}'
+        
+        $shell = New-Object -ComObject Shell.Application
+        $parentDir = Split-Path -Path $filePath -Parent
+        $fileName = Split-Path -Path $filePath -Leaf
+        
+        if (-not $parentDir) {
+            $parentDir = 'C:\\'
+        }
+        
+        $folder = $shell.Namespace($parentDir)
+        $item = $folder.ParseName($fileName)
+        
+        if ($item) {
+            $verbs = $item.Verbs()
+            foreach ($v in $verbs) {
+                $cleanName = $v.Name -replace '&', ''
+                if ($cleanName -eq $verbName) {
+                    $v.DoIt()
+                    break
+                }
+            }
+        }
+      `;
+      
+      fs.writeFileSync(tempFile, psScript, 'utf8');
+      
+      exec(`powershell -ExecutionPolicy Bypass -File "${tempFile}"`, (err) => {
+        fs.unlinkSync(tempFile);
+        if (err) {
+          console.error('executeShellVerb error:', err.message);
+        }
+      });
+      
+    } catch (err) {
+      console.error('executeShellVerb error:', err.message);
+    }
+  }
+  
+  hideContextMenu() {
+    this.contextMenu.classList.remove('active');
+  }
+  
+  async pasteItems() {
+    if (this.copyBuffer.length === 0) return;
+    
+    const fs = require('fs');
+    const taskType = this.copyMode === 'copy' ? 'copy' : 'move';
+    const taskName = this.copyMode === 'copy' ? '复制文件' : '移动文件';
+    
+    const task = this.addTask(taskType, taskName);
+    task.totalFiles = this.copyBuffer.length;
+    
+    for (let i = 0; i < this.copyBuffer.length; i++) {
+      if (task.cancelled) break;
+      
+      const sourcePath = this.copyBuffer[i];
+      const fileName = sourcePath.split('/').pop();
+      let destPath = this.joinPath(this.currentPath, fileName);
+      
+      this.updateTask(task.id, {
+        currentFile: fileName,
+        completedFiles: i
+      });
+      
+      let counter = 1;
+      while (await this.vfs.exists(destPath)) {
+        const dotIndex = fileName.lastIndexOf('.');
+        const ext = dotIndex !== -1 ? fileName.substr(dotIndex) : '';
+        const baseName = dotIndex !== -1 ? fileName.substr(0, dotIndex) : fileName;
+        destPath = this.joinPath(this.currentPath, `${baseName} (${counter})${ext}`);
+        counter++;
+      }
+      
+      try {
+        if (this.copyMode === 'copy') {
+          await this.copyRecursive(sourcePath, destPath, task);
+        } else {
+          const srcWinPath = await this.vfs.toWindows(sourcePath);
+          const destWinPath = await this.vfs.toWindows(destPath);
+          if (srcWinPath && destWinPath) {
+            fs.renameSync(srcWinPath, destWinPath);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to paste:', err);
+        this.showDialog('错误', `无法粘贴文件: ${err.message}`, 'error');
+      }
+      
+      this.updateTask(task.id, {
+        completedFiles: i + 1,
+        progress: ((i + 1) / this.copyBuffer.length) * 100
+      });
+    }
+    
+    if (!task.cancelled) {
+      this.completeTask(task.id);
+    }
+    
+    this.copyBuffer = [];
+    this.refresh();
+  }
+  
+  async copyRecursive(source, dest, task = null) {
+    if (task && task.cancelled) return;
+    
+    const stats = await this.vfs.stat(source);
+    const fs = require('fs');
+    const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
+    
+    if (isDir) {
+      const destWinPath = await this.vfs.toWindows(dest);
+      if (destWinPath) {
+        fs.mkdirSync(destWinPath, { recursive: true });
+      }
+      const fileNames = await this.vfs.readdir(source);
+      for (const file of fileNames) {
+        if (task && task.cancelled) break;
+        
+        const srcPath = this.joinPath(source, file);
+        const destPath = this.joinPath(dest, file);
+        
+        if (task) {
+          this.updateTask(task.id, {
+            currentFile: file
+          });
+        }
+        
+        await this.copyRecursive(srcPath, destPath, task);
+      }
+    } else {
+      const srcWinPath = await this.vfs.toWindows(source);
+      const destWinPath = await this.vfs.toWindows(dest);
+      if (srcWinPath && destWinPath) {
+        fs.copyFileSync(srcWinPath, destWinPath);
+        
+        if (task) {
+          const fileSize = fs.statSync(srcWinPath).size;
+          this.updateTask(task.id, {
+            completedSize: task.completedSize + fileSize,
+            totalSize: task.totalSize + fileSize
+          });
+        }
+      }
+    }
+  }
+  
+  async renameItem(path) {
+    const isVirtual = await this.vfs.isVirtualPath(path);
+    if (isVirtual) {
+      this.showDialog('错误', '无法重命名虚拟目录', 'error');
+      return;
+    }
+    
+    const oldName = path.split('/').pop();
+    const dirPath = this.getParentPath(path);
+    
+    this.showDialog('重命名', `<input type="text" id="rename-input" class="dialog-input" value="${oldName}">`, 'input', async (newName) => {
+      if (!newName || newName === oldName) return;
+      
+      const newPath = this.joinPath(dirPath, newName);
+      
+      if (await this.vfs.exists(newPath)) {
+        this.showDialog('错误', '名称已存在', 'error');
+        return;
+      }
+      
+      try {
+        await this.vfs.rename(path, newPath);
+        this.refresh();
+      } catch (err) {
+        this.showDialog('错误', `重命名失败: ${err.message}`, 'error');
+      }
+    });
+  }
+  
+  async deleteItems() {
+    const fs = require('fs');
+    
+    for (const path of this.selectedItems) {
+      try {
+        const stats = await this.vfs.stat(path);
+        const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
+        if (isDir) {
+          await this.deleteRecursive(path);
+        } else {
+          const winPath = await this.vfs.toWindows(path);
+          if (winPath) {
+            fs.unlinkSync(winPath);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to delete:', err);
+        this.showDialog('错误', `删除失败: ${err.message}`, 'error');
+      }
+    }
+    
+    this.selectedItems = [];
+    this.refresh();
+  }
+  
+  async deleteRecursive(path) {
+    const fs = require('fs');
+    const stats = await this.vfs.stat(path);
+    const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
+    
+    if (isDir) {
+      const fileNames = await this.vfs.readdir(path);
+      for (const file of fileNames) {
+        const filePath = this.joinPath(path, file);
+        await this.deleteRecursive(filePath);
+      }
+      const winPath = await this.vfs.toWindows(path);
+      if (winPath) {
+        fs.rmdirSync(winPath);
+      }
+    } else {
+      const winPath = await this.vfs.toWindows(path);
+      if (winPath) {
+        fs.unlinkSync(winPath);
+      }
+    }
+  }
+  
+  initCommandPalette() {
+    this.commandPalette = document.getElementById('command-palette');
+    this.commandPaletteInput = document.getElementById('command-palette-input');
+    this.commandPaletteList = document.getElementById('command-palette-list');
+    
+    document.getElementById('command-palette-input').addEventListener('input', (e) => {
+      this.filterCommands(e.target.value);
+    });
+    
+    document.querySelectorAll('.command-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const command = item.dataset.command;
+        this.executeCommand(command);
+        this.hideCommandPalette();
+      });
+    });
+    
+    this.commandPalette.addEventListener('click', (e) => {
+      if (e.target === this.commandPalette) {
+        this.hideCommandPalette();
+      }
+    });
+    
+    this.commandPaletteInput.addEventListener('keydown', (e) => {
+      const items = document.querySelectorAll('.command-item:not(.hidden)');
+      const selectedItem = document.querySelector('.command-item.selected');
+      
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (selectedItem) {
+          selectedItem.classList.remove('selected');
+          const next = selectedItem.nextElementSibling;
+          if (next && !next.classList.contains('hidden')) {
+            next.classList.add('selected');
+          } else {
+            items[0]?.classList.add('selected');
+          }
+        } else {
+          items[0]?.classList.add('selected');
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (selectedItem) {
+          selectedItem.classList.remove('selected');
+          const prev = selectedItem.previousElementSibling;
+          if (prev && !prev.classList.contains('hidden')) {
+            prev.classList.add('selected');
+          } else {
+            items[items.length - 1]?.classList.add('selected');
+          }
+        } else {
+          items[items.length - 1]?.classList.add('selected');
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const cmd = selectedItem || items[0];
+        if (cmd) {
+          this.executeCommand(cmd.dataset.command);
+          this.hideCommandPalette();
+        }
+      } else if (e.key === 'Escape') {
+        this.hideCommandPalette();
+      }
+    });
+  }
+  
+  showCommandPalette() {
+    this.commandPalette.classList.add('active');
+    this.commandPaletteInput.value = '';
+    this.commandPaletteInput.focus();
+    this.filterCommands('');
+  }
+  
+  hideCommandPalette() {
+    this.commandPalette.classList.remove('active');
+    document.querySelectorAll('.command-item').forEach(item => item.classList.remove('selected'));
+  }
+  
+  filterCommands(query) {
+    const q = query.toLowerCase();
+    document.querySelectorAll('.command-item').forEach(item => {
+      const text = item.querySelector('span:nth-child(2)').textContent.toLowerCase();
+      if (text.includes(q)) {
+        item.classList.remove('is-hidden');
+      } else {
+        item.classList.add('is-hidden');
+      }
+    });
+    
+    document.querySelectorAll('.command-section').forEach(section => {
+      const items = section.querySelectorAll('.command-item:not(.hidden)');
+      if (items.length === 0) {
+        section.classList.add('is-hidden');
+      } else {
+        section.classList.remove('is-hidden');
+      }
+    });
+  }
+  
+  executeCommand(command) {
+    switch (command) {
+      case 'new-file':
+        this.createNewFile();
+        break;
+      case 'new-folder':
+        this.createNewFolder();
+        break;
+      case 'delete':
+        if (this.selectedItems.length > 0) {
+          this.deleteItems();
+        }
+        break;
+      case 'go-back':
+        this.goBack();
+        break;
+      case 'go-forward':
+        this.goForward();
+        break;
+      case 'go-up':
+        this.goUp();
+        break;
+      case 'refresh':
+        this.refresh();
+        break;
+      case 'toggle-list-view':
+        this.switchView('list');
+        break;
+      case 'toggle-grid-view':
+        this.switchView('grid');
+        break;
+      case 'toggle-info-panel':
+        this.toggleInfoPanel();
+        break;
+      case 'copy':
+        this.copyMode = 'copy';
+        this.copyBuffer = [...this.selectedItems];
+        break;
+      case 'cut':
+        this.copyMode = 'cut';
+        this.copyBuffer = [...this.selectedItems];
+        break;
+      case 'paste':
+        this.pasteItems();
+        break;
+      case 'select-all':
+        this.selectAll();
+        break;
+    }
+  }
+  
+  initInfoPanel() {
+    this.infoPanel = document.getElementById('info-panel');
+    
+    document.getElementById('info-panel-close').addEventListener('click', () => {
+      this.hideInfoPanel();
+    });
+    
+    document.getElementById('info-panel-btn').addEventListener('click', () => {
+      this.toggleInfoPanel();
+    });
+    
+    document.getElementById('process-panel-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleProcessPanel();
+    });
+    
+    document.addEventListener('click', (e) => {
+      const popover = document.getElementById('status-center-popover');
+      const btn = document.getElementById('process-panel-btn');
+      if (popover && btn && !popover.contains(e.target) && !btn.contains(e.target)) {
+        this.hideProcessPanel();
+      }
+    });
+    
+    this.infoPreview = document.getElementById('info-preview');
+    this.infoProperties = document.getElementById('info-properties');
+    this.processPanel = document.getElementById('status-center-popover');
+    this.processPanelContent = document.getElementById('status-center-content');
+  }
+  
+  showInfoPanel() {
+    this.infoPanel.classList.remove('is-hidden');
+    this.infoPanelVisible = true;
+  }
+  
+  hideInfoPanel() {
+    this.infoPanel.classList.add('is-hidden');
+    this.infoPanelVisible = false;
+  }
+  
+  toggleInfoPanel() {
+    if (this.infoPanelVisible) {
+      this.hideInfoPanel();
+    } else {
+      this.showInfoPanel();
+    }
+  }
+  
+  showProcessPanel() {
+    this.processPanel.classList.remove('is-hidden');
+    this.processPanelVisible = true;
+    this.renderTasks();
+  }
+  
+  hideProcessPanel() {
+    this.processPanel.classList.add('is-hidden');
+    this.processPanelVisible = false;
+  }
+  
+  toggleProcessPanel() {
+    if (this.processPanelVisible) {
+      this.hideProcessPanel();
+    } else {
+      this.showProcessPanel();
+    }
+  }
+  
+  addTask(type, name, opts = {}) {
+    const taskId = `task-${this.taskIdCounter++}`;
+    const task = {
+      id: taskId,
+      type: type,
+      name: name,
+      progress: 0,
+      status: 'running',
+      currentFile: '',
+      targetPath: opts.targetPath || '',
+      totalFiles: 0,
+      completedFiles: 0,
+      totalSize: 0,
+      completedSize: 0,
+      cancelled: false
+    };
+    this.tasks.push(task);
+    this.renderTasks();
+    return task;
+  }
+  
+  updateTask(taskId, updates) {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task) {
+      Object.assign(task, updates);
+      this.renderTasks();
+    }
+  }
+  
+  completeTask(taskId) {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.status = 'completed';
+      task.progress = 100;
+      this.renderTasks();
+      setTimeout(() => {
+        this.removeTask(taskId);
+      }, 3000);
+    }
+  }
+  
+  cancelTask(taskId) {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.cancelled = true;
+      task.status = 'cancelled';
+      this.renderTasks();
+    }
+  }
+
+  pauseTask(taskId) {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task && task.status === 'running') {
+      task.status = 'paused';
+      task.paused = true;
+      this.renderTasks();
+      try {
+        const { ipcRenderer } = require('electron');
+        ipcRenderer.invoke('calc-size-pause', { taskId });
+      } catch {}
+    }
+  }
+
+  resumeTask(taskId) {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task && task.status === 'paused') {
+      task.status = 'running';
+      task.paused = false;
+      this.renderTasks();
+      try {
+        const { ipcRenderer } = require('electron');
+        ipcRenderer.invoke('calc-size-resume', { taskId });
+      } catch {}
+    }
+  }
+  
+  removeTask(taskId) {
+    this.tasks = this.tasks.filter(t => t.id !== taskId);
+    this.renderTasks();
+  }
+  
+  injectIcons(container = document) {
+    container.querySelectorAll('[data-icon]').forEach(el => {
+      const iconName = el.dataset.icon;
+      const iconSvg = this.icons[iconName];
+      if (iconSvg) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'icon-wrapper';
+        wrapper.innerHTML = iconSvg;
+        if (el.querySelector('.icon-wrapper')) {
+          el.querySelector('.icon-wrapper').replaceWith(wrapper);
+        } else {
+          // 替换所有子节点为图标（如果是按钮的话）
+          if (el.tagName === 'BUTTON') {
+            el.innerHTML = '';
+            el.appendChild(wrapper);
+          } else {
+            el.innerHTML = '';
+            el.appendChild(wrapper);
+          }
+        }
+      }
+    });
+  }
+
+  renderTasks() {
+    const content = this.processPanelContent;
+    
+    if (this.tasks.length === 0) {
+      content.innerHTML = `
+        <div class="status-center-empty">
+          <span data-icon="activity"></span>
+          <span>暂无正在进行的任务</span>
+        </div>
+      `;
+      return;
+    }
+    
+    content.innerHTML = '';
+    
+    this.tasks.forEach(task => {
+      const icon = task.type === 'copy' ? this.icons.copy : 
+                   task.type === 'move' ? this.icons.cut : 
+                   task.type === 'size' ? this.icons.info : this.icons.activity;
+      
+      const statusText = task.status === 'running' ? '进行中' : 
+                         task.status === 'completed' ? '已完成' : '已取消';
+      
+      const isIndeterminate = task.indeterminate && task.status === 'running';
+      
+      let progressBarClass = 'status-center-task-progress-bar';
+      if (task.status === 'completed') {
+        progressBarClass += ' status-center-task-progress-bar--complete';
+      } else if (task.status === 'cancelled') {
+        progressBarClass += ' status-center-task-progress-bar--cancelled';
+      } else if (isIndeterminate) {
+        progressBarClass += ' status-center-task-progress-bar--indeterminate';
+      }
+      
+      // 不确定模式下不设置 width（由动画控制）
+      const progressStyle = isIndeterminate ? '' : `style="width: ${task.progress}%"`;
+      
+      const currentFileText = isIndeterminate 
+        ? (task.currentFile || '正在统计大小...') 
+        : (task.currentFile || '');
+      
+      // 第二行：indeterminate模式显示targetPath（带省略号截断），其他模式显示进度
+      const infoText = isIndeterminate
+        ? (task.targetPath || '')
+        : (task.totalFiles > 0 
+          ? `${task.completedFiles}/${task.totalFiles} 文件` 
+          : task.totalSize > 0 
+            ? `${this.formatFileSize(task.completedSize)} / ${this.formatFileSize(task.totalSize)}` : '');
+      
+      // 第二行是否需要显示为省略号（targetPath存在时）
+      const infoTextNeedsEllipsis = isIndeterminate && !!task.targetPath;
+      
+      const isPaused = task.status === 'paused';
+      
+      const div = document.createElement('div');
+      div.className = 'status-center-task';
+      div.innerHTML = `
+        <div class="status-center-task-header">
+          <div class="status-center-task-icon">${icon}</div>
+          <div class="status-center-task-name">${task.name}</div>
+          <span class="status-center-task-status">${isPaused ? '已暂停' : statusText}</span>
+          ${task.status === 'running' ? `<button class="status-center-task-pause" data-task-id="${task.id}" data-icon="pause" title="暂停"></button>` : ''}
+          ${isPaused ? `<button class="status-center-task-resume" data-task-id="${task.id}" data-icon="resume" title="继续"></button>` : ''}
+          ${(task.status === 'running' || isPaused) ? `<button class="status-center-task-cancel" data-task-id="${task.id}" data-icon="close" title="取消"></button>` : ''}
+        </div>
+        <div class="status-center-task-progress">
+          <div class="${progressBarClass}" ${progressStyle}></div>
+        </div>
+        <div class="status-center-task-info">
+          <span>${currentFileText}</span>
+          <span class="${infoTextNeedsEllipsis ? 'status-center-task-info-ellipsis' : ''}">${infoText}</span>
+        </div>
+      `;
+      
+      // 注入图标
+      this.injectIcons(div);
+      
+      const pauseBtn = div.querySelector('.status-center-task-pause');
+      if (pauseBtn) {
+        pauseBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.pauseTask(task.id);
+        });
+      }
+      
+      const resumeBtn = div.querySelector('.status-center-task-resume');
+      if (resumeBtn) {
+        resumeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.resumeTask(task.id);
+        });
+      }
+      
+      const cancelBtn = div.querySelector('.status-center-task-cancel');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.cancelTask(task.id);
+          // 同时通知主进程取消 worker 任务
+          try {
+            const { ipcRenderer } = require('electron');
+            ipcRenderer.invoke('calc-size-cancel', { taskId: task.id });
+          } catch {}
+        });
+      }
+      
+      content.appendChild(div);
+    });
+  }
+  
+  async updateInfoPanel(path) {
+    if (!path) return;
+    
+    try {
+      const stats = await this.vfs.stat(path);
+      if (!stats) return;
+      
+      const name = path.split('/').pop();
+      const dir = this.getParentPath(path);
+      const isDir = stats.isDirectory ? stats.isDirectory() : false;
+      
+      // 检查缓存
+      const cachedSize = this.sizeCache.get(path);
+      let size, fileCount;
+      if (isDir && cachedSize) {
+        if (cachedSize.status === 'virtual') {
+          size = '无';
+          fileCount = '无';
+        } else if (cachedSize.status === 'ok') {
+          size = '<span class="info-size-btn" data-path="' + path + '" style="cursor:pointer" title="点击重新计算">' + cachedSize.text + '</span>';
+          fileCount = '<span class="info-filecount-value">' + (cachedSize.fileCount ? cachedSize.fileCount.toLocaleString() + ' 个文件' : '--') + '</span>';
+        } else {
+          size = '<button class="info-size-btn" data-path="' + path + '">查看</button>';
+          fileCount = '<span class="info-filecount-value">--</span>';
+        }
+      } else if (isDir) {
+        size = '<button class="info-size-btn" data-path="' + path + '">查看</button>';
+        fileCount = '<span class="info-filecount-value">--</span>';
+      } else {
+        size = this.formatFileSize(stats.size);
+        fileCount = '--';
+      }
+      const type = isDir ? '文件夹' : this.getFileType(name);
+      const modified = stats.mtime ? stats.mtime.toLocaleString('zh-CN') : '-';
+      const created = stats.birthtime ? stats.birthtime.toLocaleString('zh-CN') : '-';
+      
+      this.infoProperties.innerHTML = `
+        <div class="info-row">
+          <span class="info-label">名称</span>
+          <span class="info-value">${name}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">类型</span>
+          <span class="info-value">${type}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">大小</span>
+          <span class="info-value">${size}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">文件数</span>
+          <span class="info-value">${fileCount}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">位置</span>
+          <span class="info-value">${dir}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">修改日期</span>
+          <span class="info-value">${modified}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">创建日期</span>
+          <span class="info-value">${created}</span>
+        </div>
+      `;
+      
+      if (isDir) {
+        const sizeBtn = this.infoProperties.querySelector('.info-size-btn');
+        const fileCountValue = this.infoProperties.querySelector('.info-filecount-value');
+        
+        const updateInfo = async () => {
+          if (sizeBtn.dataset.loading) return;
+          
+          sizeBtn.dataset.loading = 'true';
+          sizeBtn.textContent = '计算中...';
+          if (fileCountValue) {
+            fileCountValue.textContent = '计算中...';
+          }
+          
+          const result = await this.calculateDirectorySize(path);
+          if (result.status === 'virtual') {
+            sizeBtn.textContent = '无';
+            if (fileCountValue) fileCountValue.textContent = '无';
+            this.sizeCache.set(path, { status: 'virtual', text: '无' });
+          } else if (result.status === 'error') {
+            sizeBtn.textContent = '错误';
+            if (fileCountValue) fileCountValue.textContent = '--';
+            this.sizeCache.delete(path);
+          } else if (result.status === 'cancelled') {
+            // 取消后恢复为"查看"按钮，文件数显示"--"
+            sizeBtn.textContent = '查看';
+            if (fileCountValue) fileCountValue.textContent = '--';
+            this.sizeCache.delete(path);
+          } else {
+            const sizeText = this.formatFileSize(result.size);
+            sizeBtn.textContent = sizeText;
+            if (fileCountValue) fileCountValue.textContent = result.fileCount.toLocaleString() + ' 个文件';
+            this.sizeCache.set(path, { status: 'ok', size: result.size, fileCount: result.fileCount, text: sizeText });
+          }
+          delete sizeBtn.dataset.loading;
+        };
+        
+        sizeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await updateInfo();
+        });
+      }
+      
+      let iconSvg = '';
+      if (stats.isDirectory()) {
+        iconSvg = this.icons.folder;
+      } else if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif')) {
+        iconSvg = this.icons.fileImage;
+      } else {
+        iconSvg = this.icons.file;
+      }
+      
+      this.infoPreview.innerHTML = `
+        <div class="preview-placeholder">
+          ${iconSvg}
+        </div>
+      `;
+      
+    } catch (err) {
+      console.error('Failed to get file info:', err);
+    }
+  }
+  
+  initViewButtons() {
+    const listBtn = document.getElementById('view-list-btn');
+    const gridBtn = document.getElementById('view-grid-btn');
+    const columnBtn = document.getElementById('view-column-btn');
+    
+    listBtn.addEventListener('click', () => {
+      this.switchView('list');
+    });
+    
+    gridBtn.addEventListener('click', () => {
+      this.switchView('grid');
+    });
+    
+    columnBtn?.addEventListener('click', () => {
+      this.toggleSplitView();
+    });
+  }
+  
+  toggleSplitView() {
+    const rightPane = document.getElementById('file-pane-right');
+    const divider = document.getElementById('pane-divider');
+    const columnBtn = document.getElementById('view-column-btn');
+    const navControls = document.getElementById('toolbar-nav-controls');
+    const syncControls = document.getElementById('toolbar-sync-controls');
+    const addressBar = document.getElementById('file-browser-address-bar');
+    
+    if (rightPane && divider) {
+      if (rightPane.classList.contains('is-hidden')) {
+        // 开启双面板
+        rightPane.classList.remove('is-hidden');
+        divider.classList.remove('is-hidden');
+        columnBtn?.classList.add('active');
+        
+        // 隐藏单面板导航控件和地址栏，只显示同步按钮
+        if (navControls) navControls.classList.add('is-hidden');
+        if (addressBar) addressBar.classList.add('is-hidden');
+        if (syncControls) syncControls.classList.remove('is-hidden');
+        
+        // 初始化右侧历史
+        this.rightPaneHistory = [this.currentPath || '/'];
+        this.rightPaneHistoryIndex = 0;
+        
+        // 更新右侧面板路径
+        if (this.currentPath) {
+          this.loadRightPanel(this.currentPath, false);
+        }
+      } else {
+        // 关闭双面板
+        rightPane.classList.add('is-hidden');
+        divider.classList.add('is-hidden');
+        columnBtn?.classList.remove('active');
+        
+        // 恢复单面板导航控件和地址栏
+        if (navControls) navControls.classList.remove('is-hidden');
+        if (addressBar) addressBar.classList.remove('is-hidden');
+        if (syncControls) syncControls.classList.add('is-hidden');
+      }
+    }
+  }
+  
+  loadRightPanel(path, updateHistory = true) {
+    const rightList = document.getElementById('file-list-right');
+    const rightGrid = document.getElementById('grid-container-right');
+    const rightStatusText = document.querySelector('#file-pane-right .pane-status-text');
+    const rightAddressInput = document.getElementById('pane-right-address');
+    
+    // 更新右侧地址栏
+    if (rightAddressInput) {
+      rightAddressInput.value = path;
+    }
+    
+    // 更新右侧历史
+    if (updateHistory && this.rightPaneHistory) {
+      this.rightPaneHistory = this.rightPaneHistory.slice(0, this.rightPaneHistoryIndex + 1);
+      if (this.rightPaneHistory[this.rightPaneHistoryIndex] !== path) {
+        this.rightPaneHistory.push(path);
+        this.rightPaneHistoryIndex = this.rightPaneHistory.length - 1;
+      }
+    }
+    
+    // 清空右侧面板
+    if (rightList) rightList.innerHTML = '';
+    if (rightGrid) rightGrid.innerHTML = '';
+    
+    // 异步加载右侧面板内容
+    this.vfs.readdir(path).then(entries => {
+      const files = entries.map(entry => ({
+        name: entry.name,
+        isDirectory: path !== '/dev' && !path.startsWith('/dev/') && entry.type === 'dir',
+        size: entry.size || 0,
+        mtime: entry.mtime || ''
+      })).filter(f => f.name);
+      
+      const sortedFiles = files.sort((a, b) => {
+        if (a.isDirectory && !b.isDirectory) return -1;
+        if (!a.isDirectory && b.isDirectory) return 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+      
+      // 构建 fileData 用于自动计算大小
+      const fileData = sortedFiles.map(file => {
+        const fullPath = this.joinPath(path, file.name);
+        const stats = {
+          isDirectory: () => file.isDirectory,
+          isFile: () => !file.isDirectory,
+          size: file.size,
+          mtime: new Date(file.mtime || Date.now()),
+          isVirtual: path === '/dev' || path.startsWith('/dev/')
+        };
+        return { file, fullPath, stats };
+      });
+      
+      fileData.forEach(({ file, fullPath, stats }) => {
+        if (rightList) {
+          const item = this.createFileItem(file, fullPath, stats);
+          rightList.appendChild(item);
+        }
+        if (rightGrid) {
+          const gridItem = this.createGridItem(file, fullPath, stats);
+          rightGrid.appendChild(gridItem);
+        }
+      });
+      
+      // 更新右侧状态栏
+      if (rightStatusText) {
+        rightStatusText.textContent = `${sortedFiles.length} 个项目`;
+      }
+      
+      // 自动计算右侧面板文件夹大小
+      const calcToken = Date.now();
+      this.autoCalcRightPanelSizes(fileData, calcToken);
+    }).catch(err => {
+      console.error('Failed to load right panel:', err);
+    });
+  }
+  
+  syncPanes() {
+    const rightAddressInput = document.getElementById('pane-right-address');
+    const rightPath = rightAddressInput?.value || '/';
+    
+    // 根据活动面板决定同步方向
+    if (this.activePane === 'right') {
+      // 用户最近操作的是右侧面板，将左侧同步为右侧
+      if (rightPath) {
+        this.loadDirectory(rightPath);
+      }
+    } else {
+      // 用户最近操作的是左侧面板，将右侧同步为左侧
+      if (this.currentPath) {
+        this.loadRightPanel(this.currentPath);
+      }
+    }
+  }
+  
+  switchView(view) {
+    this.currentView = view;
+    
+    const listBtn = document.getElementById('view-list-btn');
+    const gridBtn = document.getElementById('view-grid-btn');
+    const columnBtn = document.getElementById('view-column-btn');
+    
+    const leftListView = document.getElementById('file-list-view-left');
+    const leftGridView = document.getElementById('file-grid-view-left');
+    const rightListView = document.getElementById('file-list-view-right');
+    const rightGridView = document.getElementById('file-grid-view-right');
+    
+    if (view === 'list') {
+      listBtn.classList.add('active');
+      gridBtn.classList.remove('active');
+      
+      if (leftListView) leftListView.classList.remove('is-hidden');
+      if (leftGridView) leftGridView.classList.add('is-hidden');
+      if (rightListView) rightListView.classList.remove('is-hidden');
+      if (rightGridView) rightGridView.classList.add('is-hidden');
+    } else if (view === 'grid') {
+      listBtn.classList.remove('active');
+      gridBtn.classList.add('active');
+      
+      if (leftListView) leftListView.classList.add('is-hidden');
+      if (leftGridView) leftGridView.classList.remove('is-hidden');
+      if (rightListView) rightListView.classList.add('is-hidden');
+      if (rightGridView) rightGridView.classList.remove('is-hidden');
+    }
+  }
+  
+  initSidebar() {
+    document.querySelectorAll('[data-icon]').forEach(btn => {
+      const iconName = btn.dataset.icon;
+      const iconSvg = this.icons[iconName];
+      if (iconSvg) {
+        if (btn.querySelector('.icon-wrapper')) {
+          btn.querySelector('.icon-wrapper').innerHTML = iconSvg;
+        } else {
+          const iconWrapper = document.createElement('span');
+          iconWrapper.className = 'icon-wrapper';
+          iconWrapper.innerHTML = iconSvg;
+          btn.insertBefore(iconWrapper, btn.firstChild);
+        }
+      }
+    });
+    
+    document.querySelectorAll('.nav-sidebar-item').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        document.querySelectorAll('.nav-sidebar-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        const location = btn.dataset.location;
+        const homeDir = this.os.homedir();
+        switch (location) {
+          case 'home':
+            this.goHome();
+            break;
+          case 'desktop':
+            this.loadDirectory('/');
+            break;
+          case 'downloads':
+            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Downloads'));
+            break;
+          case 'documents':
+            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Documents'));
+            break;
+          case 'pictures':
+            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Pictures'));
+            break;
+          case 'music':
+            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Music'));
+            break;
+          case 'videos':
+            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Videos'));
+            break;
+          case 'trash':
+            this.showDialog('回收站', '回收站功能需要系统支持', 'info');
+            break;
+        }
+      });
+    });
+    
+    document.querySelectorAll('.nav-sidebar-drive').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const path = btn.dataset.path;
+        const location = btn.dataset.location;
+        
+        if (path) {
+          const unixPath = await this.vfs.toUnix(path);
+          this.loadDirectory(unixPath);
+        } else if (location === 'network') {
+          this.showDialog('网络', '网络功能需要系统支持', 'info');
+        }
+      });
+    });
+  }
+  
+  initKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      
+      if (e.ctrlKey && e.key === 'p') {
+        e.preventDefault();
+        this.showCommandPalette();
+      }
+      
+      if (e.ctrlKey && e.key === 't') {
+        e.preventDefault();
+        this.createNewTab();
+      }
+      
+      if (e.ctrlKey && e.key === 'w') {
+        e.preventDefault();
+        this.closeTab(this.currentTabId);
+      }
+      
+      if (e.ctrlKey && e.key === 'n') {
+        e.preventDefault();
+        this.createNewFile();
+      }
+      
+      if (e.ctrlKey && e.shiftKey && e.key === 'N') {
+        e.preventDefault();
+        this.createNewFolder();
+      }
+      
+      if (e.ctrlKey && e.key === 'a') {
+        e.preventDefault();
+        this.selectAll();
+      }
+      
+      if (e.key === 'Delete') {
+        e.preventDefault();
+        if (this.selectedItems.length > 0) {
+          this.showDialog('确认删除', `确定要删除 ${this.selectedItems.length} 个项目吗？`, 'confirm', () => {
+            this.deleteItems();
+          });
+        }
+      }
+      
+      if (e.key === 'F2') {
+        e.preventDefault();
+        if (this.selectedItems.length === 1) {
+          this.renameItem(this.selectedItems[0]);
+        }
+      }
+      
+      if (e.key === 'F5') {
+        e.preventDefault();
+        this.refresh();
+      }
+      
+      if (e.ctrlKey && e.key === 'c') {
+        e.preventDefault();
+        if (this.selectedItems.length > 0) {
+          this.copyMode = 'copy';
+          this.copyBuffer = [...this.selectedItems];
+        }
+      }
+      
+      if (e.ctrlKey && e.key === 'x') {
+        e.preventDefault();
+        if (this.selectedItems.length > 0) {
+          this.copyMode = 'cut';
+          this.copyBuffer = [...this.selectedItems];
+        }
+      }
+      
+      if (e.ctrlKey && e.key === 'v') {
+        e.preventDefault();
+        this.pasteItems();
+      }
+      
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        this.goBack();
+      }
+      
+      if (e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault();
+        this.goForward();
+      }
+      
+      if (e.altKey && e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.goUp();
+      }
+      
+      if (e.ctrlKey && e.shiftKey && e.key === '1') {
+        e.preventDefault();
+        this.switchView('list');
+      }
+      
+      if (e.ctrlKey && e.shiftKey && e.key === '2') {
+        e.preventDefault();
+        this.switchView('grid');
+      }
+      
+      if (e.ctrlKey && e.shiftKey && e.key === '3') {
+        e.preventDefault();
+        this.switchView('column');
+      }
+      
+      if (e.ctrlKey && e.key === 'i') {
+        e.preventDefault();
+        this.toggleInfoPanel();
+      }
+      
+      if (e.key === 'Enter') {
+        if (this.selectedItems.length === 1) {
+          const item = document.querySelector(`[data-path="${this.selectedItems[0]}"]`);
+          if (item) {
+            this.handleFileDoubleClick(item);
+          }
+        }
+      }
+    });
+  }
+  
+  showDialog(title, content, type = 'info', callback = null) {
+    const overlay = document.getElementById('dialog-overlay');
+    const dialog = document.getElementById('dialog');
+    const dialogTitle = document.getElementById('dialog-title');
+    const dialogBody = document.getElementById('dialog-body');
+    const dialogConfirm = document.getElementById('dialog-confirm');
+    const dialogCancel = document.getElementById('dialog-cancel');
+    
+    dialogTitle.textContent = title;
+    dialogBody.innerHTML = content;
+    
+    if (type === 'error') {
+      dialogConfirm.textContent = '确定';
+      dialogCancel.style.display = 'none';
+    } else if (type === 'confirm') {
+      dialogConfirm.textContent = '确定';
+      dialogCancel.textContent = '取消';
+      dialogCancel.style.display = 'block';
+    } else if (type === 'input') {
+      dialogConfirm.textContent = '确定';
+      dialogCancel.textContent = '取消';
+      dialogCancel.style.display = 'block';
+    } else {
+      dialogConfirm.textContent = '确定';
+      dialogCancel.style.display = 'none';
+    }
+    
+    overlay.classList.add('active');
+    dialog.classList.add('active');
+    
+    const close = () => {
+      overlay.classList.remove('active');
+      dialog.classList.remove('active');
+      dialogConfirm.removeEventListener('click', onConfirm);
+      dialogCancel.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+    
+    const onConfirm = () => {
+      if (type === 'input') {
+        const input = dialogBody.querySelector('input');
+        if (callback) callback(input.value);
+      } else {
+        if (callback) callback();
+      }
+      close();
+    };
+    
+    const onCancel = () => {
+      close();
+    };
+    
+    const onKeyDown = (e) => {
+      if (e.key === 'Enter') {
+        onConfirm();
+      } else if (e.key === 'Escape') {
+        onCancel();
+      }
+    };
+    
+    dialogConfirm.addEventListener('click', onConfirm);
+    dialogCancel.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKeyDown);
+    
+    if (type === 'input') {
+      const input = dialogBody.querySelector('input');
+      setTimeout(() => {
+        input?.focus();
+        input?.select();
+      }, 100);
+    }
+  }
+  
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  window.fileManager = new FileManager();
+});

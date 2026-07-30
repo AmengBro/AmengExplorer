@@ -1,0 +1,2 @@
+# AmengExplorer
+使用linux的方式对待windows文件管理
