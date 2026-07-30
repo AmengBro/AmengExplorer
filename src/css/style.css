@@ -666,6 +666,14 @@ svg {
   background-color: hsl(var(--primary) / 15%);
 }
 
+.file-item.cut-item,
+.grid-item.cut-item,
+.column-item.cut-item {
+  opacity: 0.4;
+  filter: grayscale(50%);
+  transition: opacity var(--hover-transition-duration-out) var(--hover-transition-easing-out);
+}
+
 .file-item-icon {
   width: 24px;
   height: 24px;
@@ -1741,20 +1749,33 @@ svg {
 
 .dialog-input {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid hsl(var(--border) / 50%);
+  padding: 10px 14px;
+  border: 1.5px solid hsl(var(--border));
   border-radius: var(--radius-md);
-  background-color: hsl(var(--background-3));
+  background-color: hsl(var(--background-2));
   color: hsl(var(--foreground));
   font-size: 14px;
+  font-family: inherit;
   box-sizing: border-box;
   outline: none;
-  transition: border-color var(--hover-transition-duration-out) var(--hover-transition-easing-out);
+  transition: border-color var(--hover-transition-duration-out) var(--hover-transition-easing-out),
+              box-shadow var(--hover-transition-duration-out) var(--hover-transition-easing-out),
+              background-color var(--hover-transition-duration-out) var(--hover-transition-easing-out);
+}
+
+.dialog-input::placeholder {
+  color: hsl(var(--muted-foreground) / 70%);
+}
+
+.dialog-input:hover {
+  border-color: hsl(var(--border) / 80%);
+  background-color: hsl(var(--background-3));
 }
 
 .dialog-input:focus {
   border-color: hsl(var(--primary));
-  box-shadow: 0 0 0 2px hsl(var(--primary) / 20%);
+  box-shadow: 0 0 0 3px hsl(var(--primary) / 15%);
+  background-color: hsl(var(--background));
 }
 
 .home-page {

@@ -833,13 +833,10 @@ class FileManager {
     
     const isDir = file.isDirectory;
     const fileSize = stats.size;
-    const isVirtual = stats.isVirtual;
     
-    let sizeDisplay;
-    if (isDir) {
-      sizeDisplay = '无';
-    } else {
-      sizeDisplay = fileSize > 0 ? this.formatFileSize(fileSize) : '无';
+    let sizeDisplay = '';
+    if (!isDir) {
+      sizeDisplay = this.formatFileSize(fileSize);
     }
     
     div.innerHTML = `
@@ -1831,7 +1828,7 @@ class FileManager {
   }
   
   createNewFile() {
-    this.showDialog('新建文件', '<input type="text" id="new-file-name" placeholder="文件名" value="新建文件.txt">', 'input', async (name) => {
+    this.showDialog('新建文件', '<input type="text" class="dialog-input" id="new-file-name" placeholder="请输入文件名" value="新建文件.txt">', 'input', async (name) => {
       if (!name) return;
       
       const fullPath = this.joinPath(this.currentPath, name);
@@ -1858,7 +1855,7 @@ class FileManager {
   }
   
   createNewFolder() {
-    this.showDialog('新建文件夹', '<input type="text" id="new-folder-name" placeholder="文件夹名称" value="新建文件夹">', 'input', (name) => {
+    this.showDialog('新建文件夹', '<input type="text" class="dialog-input" id="new-folder-name" placeholder="请输入文件夹名称" value="新建文件夹">', 'input', (name) => {
       if (!name) return;
       
       const fullPath = this.joinPath(this.currentPath, name);
@@ -1887,6 +1884,7 @@ class FileManager {
     
     document.addEventListener('click', () => {
       this.hideContextMenu();
+      this.hideBlankContextMenu();
     });
     
     document.getElementById('ctx-open').addEventListener('click', () => {
@@ -1960,6 +1958,7 @@ class FileManager {
     document.getElementById('ctx-cut').addEventListener('click', () => {
       this.copyMode = 'cut';
       this.copyBuffer = [...this.selectedItems];
+      this.markCutItems();
       this.hideContextMenu();
     });
     
@@ -1992,6 +1991,115 @@ class FileManager {
       }
       this.hideContextMenu();
     });
+    
+    // 空白处右键菜单事件绑定
+    const blankNewFileBtn = document.getElementById('ctx-blank-new-file');
+    if (blankNewFileBtn) {
+      blankNewFileBtn.addEventListener('click', () => {
+        this.createNewFile();
+        this.hideBlankContextMenu();
+      });
+    }
+    
+    const blankNewFolderBtn = document.getElementById('ctx-blank-new-folder');
+    if (blankNewFolderBtn) {
+      blankNewFolderBtn.addEventListener('click', () => {
+        this.createNewFolder();
+        this.hideBlankContextMenu();
+      });
+    }
+    
+    const blankPasteBtn = document.getElementById('ctx-blank-paste');
+    if (blankPasteBtn) {
+      blankPasteBtn.addEventListener('click', () => {
+        this.pasteItems();
+        this.hideBlankContextMenu();
+      });
+    }
+    
+    const blankRefreshBtn = document.getElementById('ctx-blank-refresh');
+    if (blankRefreshBtn) {
+      blankRefreshBtn.addEventListener('click', () => {
+        this.refresh();
+        this.hideBlankContextMenu();
+      });
+    }
+    
+    const blankPropertiesBtn = document.getElementById('ctx-blank-properties');
+    if (blankPropertiesBtn) {
+      blankPropertiesBtn.addEventListener('click', () => {
+        this.updateInfoPanel(this.currentPath);
+        this.showInfoPanel();
+        this.hideBlankContextMenu();
+      });
+    }
+    
+    // 绑定文件列表/网格视图的空白处右键事件
+    this.bindBlankAreaContextMenu();
+  }
+  
+  bindBlankAreaContextMenu() {
+    const selectors = ['#file-list-left', '#file-list-right', '#grid-container-left', '#grid-container-right'];
+    selectors.forEach(selector => {
+      const el = document.querySelector(selector);
+      if (el) {
+        el.addEventListener('contextmenu', (e) => {
+          // 只有点击在空白处（非文件项）时才显示空白菜单
+          const item = e.target.closest('.file-item, .grid-item');
+          if (!item) {
+            e.preventDefault();
+            this.showBlankContextMenu(e.clientX, e.clientY);
+          }
+        });
+      }
+    });
+  }
+  
+  showBlankContextMenu(x, y) {
+    const blankMenu = document.getElementById('context-menu-blank');
+    if (!blankMenu) return;
+    
+    const pasteBtn = document.getElementById('ctx-blank-paste');
+    if (pasteBtn) {
+      pasteBtn.disabled = this.copyBuffer.length === 0;
+    }
+    
+    // 清除所有选中项
+    this.deselectAll();
+    
+    blankMenu.classList.add('active');
+    
+    const menuContent = blankMenu.querySelector('.context-menu-content');
+    const menuWidth = menuContent.offsetWidth;
+    const menuHeight = menuContent.offsetHeight;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+    
+    let finalX = x;
+    let finalY = y;
+    
+    if (finalX + menuWidth > windowWidth) {
+      finalX = windowWidth - menuWidth - 4;
+    }
+    if (finalY + menuHeight > windowHeight) {
+      finalY = windowHeight - menuHeight - 4;
+    }
+    
+    // 设置菜单内容定位
+    menuContent.style.left = `${finalX}px`;
+    menuContent.style.top = `${finalY}px`;
+  }
+  
+  hideBlankContextMenu() {
+    const blankMenu = document.getElementById('context-menu-blank');
+    if (blankMenu) {
+      blankMenu.classList.remove('active');
+      const menuContent = blankMenu.querySelector('.context-menu-content');
+      if (menuContent) {
+        menuContent.style.left = '';
+        menuContent.style.top = '';
+      }
+    }
   }
   
   async showContextMenu(x, y, item) {
@@ -2225,6 +2333,21 @@ class FileManager {
     this.contextMenu.classList.remove('active');
   }
   
+  markCutItems() {
+    this.copyBuffer.forEach(path => {
+      const items = document.querySelectorAll(`[data-path="${path}"]`);
+      items.forEach(item => {
+        item.classList.add('cut-item');
+      });
+    });
+  }
+  
+  unmarkCutItems() {
+    document.querySelectorAll('.cut-item').forEach(item => {
+      item.classList.remove('cut-item');
+    });
+  }
+  
   async pasteItems() {
     if (this.copyBuffer.length === 0) return;
     
@@ -2281,7 +2404,13 @@ class FileManager {
       this.completeTask(task.id);
     }
     
+    // 剪切模式完成后清除淡化效果
+    if (this.copyMode === 'cut') {
+      this.unmarkCutItems();
+    }
+    
     this.copyBuffer = [];
+    this.copyMode = 'copy';
     this.refresh();
   }
   
@@ -2546,6 +2675,7 @@ class FileManager {
       case 'cut':
         this.copyMode = 'cut';
         this.copyBuffer = [...this.selectedItems];
+        this.markCutItems();
         break;
       case 'paste':
         this.pasteItems();
@@ -2983,6 +3113,32 @@ class FileManager {
     columnBtn?.addEventListener('click', () => {
       this.toggleSplitView();
     });
+    
+    // 绑定左侧面板视图按钮事件
+    const leftPaneListBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="list"]');
+    const leftPaneGridBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="grid"]');
+    if (leftPaneListBtn) {
+      leftPaneListBtn.addEventListener('click', () => this.switchView('list'));
+    }
+    if (leftPaneGridBtn) {
+      leftPaneGridBtn.addEventListener('click', () => this.switchView('grid'));
+    }
+    
+    // 绑定右侧面板视图按钮事件
+    const rightPaneListBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="list"]');
+    const rightPaneGridBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="grid"]');
+    if (rightPaneListBtn) {
+      rightPaneListBtn.addEventListener('click', () => this.switchView('list'));
+    }
+    if (rightPaneGridBtn) {
+      rightPaneGridBtn.addEventListener('click', () => this.switchView('grid'));
+    }
+    
+    // 初始状态：单面板模式隐藏左侧面板子控件（pane-header）
+    const leftPaneHeader = document.querySelector('#file-pane-left .pane-header');
+    if (leftPaneHeader) {
+      leftPaneHeader.classList.add('is-hidden');
+    }
   }
   
   toggleSplitView() {
@@ -2992,6 +3148,12 @@ class FileManager {
     const navControls = document.getElementById('toolbar-nav-controls');
     const syncControls = document.getElementById('toolbar-sync-controls');
     const addressBar = document.getElementById('file-browser-address-bar');
+    const leftPaneHeader = document.querySelector('#file-pane-left .pane-header');
+    const rightPaneHeader = document.querySelector('#file-pane-right .pane-header');
+    const leftPaneViewControls = document.querySelector('#file-pane-left .pane-view-controls');
+    const rightPaneViewControls = document.querySelector('#file-pane-right .pane-view-controls');
+    const topListViewBtn = document.getElementById('view-list-btn');
+    const topGridViewBtn = document.getElementById('view-grid-btn');
     
     if (rightPane && divider) {
       if (rightPane.classList.contains('is-hidden')) {
@@ -3000,10 +3162,18 @@ class FileManager {
         divider.classList.remove('is-hidden');
         columnBtn?.classList.add('active');
         
-        // 隐藏单面板导航控件和地址栏，只显示同步按钮
+        // 隐藏顶栏：导航控件、地址栏、列表/网格视图按钮
         if (navControls) navControls.classList.add('is-hidden');
         if (addressBar) addressBar.classList.add('is-hidden');
+        if (topListViewBtn) topListViewBtn.classList.add('is-hidden');
+        if (topGridViewBtn) topGridViewBtn.classList.add('is-hidden');
         if (syncControls) syncControls.classList.remove('is-hidden');
+        
+        // 显示子控件：pane-header（包含地址栏和视图按钮）
+        if (leftPaneHeader) leftPaneHeader.classList.remove('is-hidden');
+        if (rightPaneHeader) rightPaneHeader.classList.remove('is-hidden');
+        if (leftPaneViewControls) leftPaneViewControls.classList.remove('is-hidden');
+        if (rightPaneViewControls) rightPaneViewControls.classList.remove('is-hidden');
         
         // 初始化右侧历史
         this.rightPaneHistory = [this.currentPath || '/'];
@@ -3013,18 +3183,47 @@ class FileManager {
         if (this.currentPath) {
           this.loadRightPanel(this.currentPath, false);
         }
+        
+        // 更新子控件视图按钮状态
+        this.updatePaneViewControls();
       } else {
         // 关闭双面板
         rightPane.classList.add('is-hidden');
         divider.classList.add('is-hidden');
         columnBtn?.classList.remove('active');
         
-        // 恢复单面板导航控件和地址栏
+        // 恢复顶栏：导航控件、地址栏、列表/网格视图按钮
         if (navControls) navControls.classList.remove('is-hidden');
         if (addressBar) addressBar.classList.remove('is-hidden');
+        if (topListViewBtn) topListViewBtn.classList.remove('is-hidden');
+        if (topGridViewBtn) topGridViewBtn.classList.remove('is-hidden');
         if (syncControls) syncControls.classList.add('is-hidden');
+        
+        // 隐藏子控件：所有 pane-header（单面板模式下不需要）
+        if (leftPaneHeader) leftPaneHeader.classList.add('is-hidden');
+        if (rightPaneHeader) rightPaneHeader.classList.add('is-hidden');
       }
     }
+  }
+  
+  updatePaneViewControls() {
+    const view = this.currentView;
+    const leftListBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="list"]');
+    const leftGridBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="grid"]');
+    const rightListBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="list"]');
+    const rightGridBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="grid"]');
+    
+    const updateBtn = (btn, active) => {
+      if (btn) {
+        if (active) btn.classList.add('active');
+        else btn.classList.remove('active');
+      }
+    };
+    
+    updateBtn(leftListBtn, view === 'list');
+    updateBtn(leftGridBtn, view === 'grid');
+    updateBtn(rightListBtn, view === 'list');
+    updateBtn(rightGridBtn, view === 'grid');
   }
   
   loadRightPanel(path, updateHistory = true) {
@@ -3150,6 +3349,9 @@ class FileManager {
       if (rightListView) rightListView.classList.add('is-hidden');
       if (rightGridView) rightGridView.classList.remove('is-hidden');
     }
+    
+    // 更新子控件视图按钮状态
+    this.updatePaneViewControls();
   }
   
   initSidebar() {
@@ -3287,6 +3489,7 @@ class FileManager {
         if (this.selectedItems.length > 0) {
           this.copyMode = 'cut';
           this.copyBuffer = [...this.selectedItems];
+          this.markCutItems();
         }
       }
       

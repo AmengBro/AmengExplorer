@@ -76,7 +76,7 @@
             </div>
 
             <div class="window-toolbar-right">
-              <button class="window-toolbar-button" id="browser-filter-btn" data-icon="search" title="筛选"></button>
+              <button class="window-toolbar-button" id="browser-filter-btn" data-icon="filter" title="筛选"></button>
               <button class="window-toolbar-button" id="view-list-btn" data-icon="list" title="列表视图"></button>
               <button class="window-toolbar-button" id="view-grid-btn" data-icon="grid" title="网格视图"></button>
               <button class="window-toolbar-button" id="view-column-btn" data-icon="alignHorizontalCenter" title="分栏视图"></button>
@@ -340,6 +340,43 @@
         <div class="context-menu-separator"></div>
         <div class="context-menu-group">
           <button class="context-menu-item" id="ctx-properties" data-icon="info">
+            <span>属性</span>
+            <span class="context-menu-shortcut">Alt+Enter</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 空白处右键菜单 -->
+    <div class="context-menu" id="context-menu-blank">
+      <div class="context-menu-content">
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-blank-new-file" data-icon="fileAdd">
+            <span>新建文件</span>
+            <span class="context-menu-shortcut">Ctrl+N</span>
+          </button>
+          <button class="context-menu-item" id="ctx-blank-new-folder" data-icon="folderAdd">
+            <span>新建文件夹</span>
+            <span class="context-menu-shortcut">Ctrl+Shift+N</span>
+          </button>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-blank-paste" data-icon="paste">
+            <span>粘贴</span>
+            <span class="context-menu-shortcut">Ctrl+V</span>
+          </button>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-blank-refresh" data-icon="refresh">
+            <span>刷新</span>
+            <span class="context-menu-shortcut">F5</span>
+          </button>
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-group">
+          <button class="context-menu-item" id="ctx-blank-properties" data-icon="info">
             <span>属性</span>
             <span class="context-menu-shortcut">Alt+Enter</span>
           </button>
