@@ -9,6 +9,8 @@ class FileManager {
     this.copyMode = 'copy';
     
     this.currentView = 'list';
+    this.leftPaneView = 'list';
+    this.rightPaneView = 'list';
     this.infoPanelVisible = false;
     this.processPanelVisible = false;
     
@@ -540,6 +542,21 @@ class FileManager {
       this.addressBarInput.value = dirPath;
     }
     
+    const leftAddressInput = document.getElementById('pane-left-address');
+    if (leftAddressInput) {
+      leftAddressInput.value = dirPath;
+    }
+    
+    const leftListView = document.getElementById('file-list-view-left');
+    const leftGridView = document.getElementById('file-grid-view-left');
+    if (this.leftPaneView === 'list') {
+      if (leftListView) leftListView.classList.remove('is-hidden');
+      if (leftGridView) leftGridView.classList.add('is-hidden');
+    } else if (this.leftPaneView === 'grid') {
+      if (leftListView) leftListView.classList.add('is-hidden');
+      if (leftGridView) leftGridView.classList.remove('is-hidden');
+    }
+    
     const tabState = this.tabs[this.currentTabId];
     if (tabState) {
       tabState.path = dirPath;
@@ -593,7 +610,7 @@ class FileManager {
     }
   }
   
-  async renderFileList(files) {
+  async renderFileList(files, pane = 'left') {
     if (this._loadCancelled) return [];
     
     const fileListLeft = document.getElementById('file-list-left');
@@ -601,10 +618,13 @@ class FileManager {
     const gridContainerLeft = document.getElementById('grid-container-left');
     const gridContainerRight = document.getElementById('grid-container-right');
     
-    if (fileListLeft) fileListLeft.innerHTML = '';
-    if (fileListRight) fileListRight.innerHTML = '';
-    if (gridContainerLeft) gridContainerLeft.innerHTML = '';
-    if (gridContainerRight) gridContainerRight.innerHTML = '';
+    if (pane === 'left') {
+      if (fileListLeft) fileListLeft.innerHTML = '';
+      if (gridContainerLeft) gridContainerLeft.innerHTML = '';
+    } else if (pane === 'right') {
+      if (fileListRight) fileListRight.innerHTML = '';
+      if (gridContainerRight) gridContainerRight.innerHTML = '';
+    }
     
     const isVirtualDir = await this.vfs.isVirtualPath(this.currentPath);
     
@@ -654,22 +674,24 @@ class FileManager {
     if (this._loadCancelled) return [];
     
     fileData.forEach(({ file, fullPath, stats }) => {
-      // 为每个面板创建独立的元素，避免 cloneNode 丢失事件监听器
-      if (fileListLeft) {
-        const item = this.createFileItem(file, fullPath, stats);
-        fileListLeft.appendChild(item);
-      }
-      if (fileListRight) {
-        const item = this.createFileItem(file, fullPath, stats);
-        fileListRight.appendChild(item);
-      }
-      if (gridContainerLeft) {
-        const gridItem = this.createGridItem(file, fullPath, stats);
-        gridContainerLeft.appendChild(gridItem);
-      }
-      if (gridContainerRight) {
-        const gridItem = this.createGridItem(file, fullPath, stats);
-        gridContainerRight.appendChild(gridItem);
+      if (pane === 'left') {
+        if (fileListLeft) {
+          const item = this.createFileItem(file, fullPath, stats);
+          fileListLeft.appendChild(item);
+        }
+        if (gridContainerLeft) {
+          const gridItem = this.createGridItem(file, fullPath, stats);
+          gridContainerLeft.appendChild(gridItem);
+        }
+      } else if (pane === 'right') {
+        if (fileListRight) {
+          const item = this.createFileItem(file, fullPath, stats);
+          fileListRight.appendChild(item);
+        }
+        if (gridContainerRight) {
+          const gridItem = this.createGridItem(file, fullPath, stats);
+          gridContainerRight.appendChild(gridItem);
+        }
       }
     });
     
@@ -1448,10 +1470,12 @@ class FileManager {
     const fileBrowserToolbar = document.querySelector('.file-browser-toolbar');
     const fileBrowserStatusBar = document.getElementById('file-browser-status-bar');
     const navigatorToolbar = document.querySelector('.navigator-toolbar-actions');
+    const rightPane = document.getElementById('file-pane-right');
+    const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
     
     if (homePage) homePage.classList.add('is-hidden');
     if (fileBrowserContent) fileBrowserContent.classList.remove('is-hidden');
-    if (addressBar) addressBar.classList.remove('is-hidden');
+    if (addressBar && !isSplitView) addressBar.classList.remove('is-hidden');
     if (tabBar) tabBar.classList.remove('is-hidden');
     if (fileBrowserToolbar) fileBrowserToolbar.classList.remove('is-hidden');
     if (fileBrowserStatusBar) fileBrowserStatusBar.classList.remove('is-hidden');
@@ -2788,9 +2812,6 @@ class FileManager {
       task.status = 'completed';
       task.progress = 100;
       this.renderTasks();
-      setTimeout(() => {
-        this.removeTask(taskId);
-      }, 3000);
     }
   }
   
@@ -2834,6 +2855,11 @@ class FileManager {
     this.renderTasks();
   }
   
+  clearFinishedTasks() {
+    this.tasks = this.tasks.filter(t => t.status === 'running' || t.status === 'paused');
+    this.renderTasks();
+  }
+  
   injectIcons(container = document) {
     container.querySelectorAll('[data-icon]').forEach(el => {
       const iconName = el.dataset.icon;
@@ -2873,6 +2899,31 @@ class FileManager {
     
     content.innerHTML = '';
     
+    const finishedCount = this.tasks.filter(t => t.status === 'completed' || t.status === 'cancelled').length;
+    
+    // 面板头部
+    if (this.tasks.length > 0) {
+      const header = document.createElement('div');
+      header.className = 'status-center-panel-header';
+      header.innerHTML = `
+        <span class="status-center-panel-title">任务 (${this.tasks.length})</span>
+        <div class="status-center-panel-actions">
+          ${finishedCount > 0 ? `<button class="status-center-panel-clear" data-icon="delete" title="清除已完成和取消的任务"></button>` : ''}
+        </div>
+      `;
+      content.appendChild(header);
+      
+      this.injectIcons(header);
+      
+      const clearBtn = header.querySelector('.status-center-panel-clear');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.clearFinishedTasks();
+        });
+      }
+    }
+    
     this.tasks.forEach(task => {
       const icon = task.type === 'copy' ? this.icons.copy : 
                    task.type === 'move' ? this.icons.cut : 
@@ -2892,14 +2943,12 @@ class FileManager {
         progressBarClass += ' status-center-task-progress-bar--indeterminate';
       }
       
-      // 不确定模式下不设置 width（由动画控制）
       const progressStyle = isIndeterminate ? '' : `style="width: ${task.progress}%"`;
       
       const currentFileText = isIndeterminate 
         ? (task.currentFile || '正在统计大小...') 
         : (task.currentFile || '');
       
-      // 第二行：indeterminate模式显示targetPath（带省略号截断），其他模式显示进度
       const infoText = isIndeterminate
         ? (task.targetPath || '')
         : (task.totalFiles > 0 
@@ -2907,10 +2956,10 @@ class FileManager {
           : task.totalSize > 0 
             ? `${this.formatFileSize(task.completedSize)} / ${this.formatFileSize(task.totalSize)}` : '');
       
-      // 第二行是否需要显示为省略号（targetPath存在时）
       const infoTextNeedsEllipsis = isIndeterminate && !!task.targetPath;
       
       const isPaused = task.status === 'paused';
+      const isFinished = task.status === 'completed' || task.status === 'cancelled';
       
       const div = document.createElement('div');
       div.className = 'status-center-task';
@@ -2922,6 +2971,7 @@ class FileManager {
           ${task.status === 'running' ? `<button class="status-center-task-pause" data-task-id="${task.id}" data-icon="pause" title="暂停"></button>` : ''}
           ${isPaused ? `<button class="status-center-task-resume" data-task-id="${task.id}" data-icon="resume" title="继续"></button>` : ''}
           ${(task.status === 'running' || isPaused) ? `<button class="status-center-task-cancel" data-task-id="${task.id}" data-icon="close" title="取消"></button>` : ''}
+          ${isFinished ? `<button class="status-center-task-remove" data-task-id="${task.id}" data-icon="delete" title="清除该任务"></button>` : ''}
         </div>
         <div class="status-center-task-progress">
           <div class="${progressBarClass}" ${progressStyle}></div>
@@ -2932,7 +2982,6 @@ class FileManager {
         </div>
       `;
       
-      // 注入图标
       this.injectIcons(div);
       
       const pauseBtn = div.querySelector('.status-center-task-pause');
@@ -2956,11 +3005,18 @@ class FileManager {
         cancelBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           this.cancelTask(task.id);
-          // 同时通知主进程取消 worker 任务
           try {
             const { ipcRenderer } = require('electron');
             ipcRenderer.invoke('calc-size-cancel', { taskId: task.id });
           } catch {}
+        });
+      }
+      
+      const removeBtn = div.querySelector('.status-center-task-remove');
+      if (removeBtn) {
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.removeTask(task.id);
         });
       }
       
@@ -3118,20 +3174,20 @@ class FileManager {
     const leftPaneListBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="list"]');
     const leftPaneGridBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="grid"]');
     if (leftPaneListBtn) {
-      leftPaneListBtn.addEventListener('click', () => this.switchView('list'));
+      leftPaneListBtn.addEventListener('click', () => this.switchView('list', 'left'));
     }
     if (leftPaneGridBtn) {
-      leftPaneGridBtn.addEventListener('click', () => this.switchView('grid'));
+      leftPaneGridBtn.addEventListener('click', () => this.switchView('grid', 'left'));
     }
     
     // 绑定右侧面板视图按钮事件
     const rightPaneListBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="list"]');
     const rightPaneGridBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="grid"]');
     if (rightPaneListBtn) {
-      rightPaneListBtn.addEventListener('click', () => this.switchView('list'));
+      rightPaneListBtn.addEventListener('click', () => this.switchView('list', 'right'));
     }
     if (rightPaneGridBtn) {
-      rightPaneGridBtn.addEventListener('click', () => this.switchView('grid'));
+      rightPaneGridBtn.addEventListener('click', () => this.switchView('grid', 'right'));
     }
     
     // 初始状态：单面板模式隐藏左侧面板子控件（pane-header）
@@ -3207,7 +3263,6 @@ class FileManager {
   }
   
   updatePaneViewControls() {
-    const view = this.currentView;
     const leftListBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="list"]');
     const leftGridBtn = document.querySelector('#file-pane-left .pane-view-controls .pane-btn[data-icon="grid"]');
     const rightListBtn = document.querySelector('#file-pane-right .pane-view-controls .pane-btn[data-icon="list"]');
@@ -3220,24 +3275,24 @@ class FileManager {
       }
     };
     
-    updateBtn(leftListBtn, view === 'list');
-    updateBtn(leftGridBtn, view === 'grid');
-    updateBtn(rightListBtn, view === 'list');
-    updateBtn(rightGridBtn, view === 'grid');
+    updateBtn(leftListBtn, this.leftPaneView === 'list');
+    updateBtn(leftGridBtn, this.leftPaneView === 'grid');
+    updateBtn(rightListBtn, this.rightPaneView === 'list');
+    updateBtn(rightGridBtn, this.rightPaneView === 'grid');
   }
   
   loadRightPanel(path, updateHistory = true) {
     const rightList = document.getElementById('file-list-right');
     const rightGrid = document.getElementById('grid-container-right');
+    const rightListView = document.getElementById('file-list-view-right');
+    const rightGridView = document.getElementById('file-grid-view-right');
     const rightStatusText = document.querySelector('#file-pane-right .pane-status-text');
     const rightAddressInput = document.getElementById('pane-right-address');
     
-    // 更新右侧地址栏
     if (rightAddressInput) {
       rightAddressInput.value = path;
     }
     
-    // 更新右侧历史
     if (updateHistory && this.rightPaneHistory) {
       this.rightPaneHistory = this.rightPaneHistory.slice(0, this.rightPaneHistoryIndex + 1);
       if (this.rightPaneHistory[this.rightPaneHistoryIndex] !== path) {
@@ -3246,11 +3301,16 @@ class FileManager {
       }
     }
     
-    // 清空右侧面板
-    if (rightList) rightList.innerHTML = '';
-    if (rightGrid) rightGrid.innerHTML = '';
+    if (this.rightPaneView === 'list') {
+      if (rightList) rightList.innerHTML = '';
+      if (rightListView) rightListView.classList.remove('is-hidden');
+      if (rightGridView) rightGridView.classList.add('is-hidden');
+    } else if (this.rightPaneView === 'grid') {
+      if (rightGrid) rightGrid.innerHTML = '';
+      if (rightListView) rightListView.classList.add('is-hidden');
+      if (rightGridView) rightGridView.classList.remove('is-hidden');
+    }
     
-    // 异步加载右侧面板内容
     this.vfs.readdir(path).then(entries => {
       const files = entries.map(entry => ({
         name: entry.name,
@@ -3265,7 +3325,6 @@ class FileManager {
         return a.name.localeCompare(b.name, 'zh-CN');
       });
       
-      // 构建 fileData 用于自动计算大小
       const fileData = sortedFiles.map(file => {
         const fullPath = this.joinPath(path, file.name);
         const stats = {
@@ -3279,22 +3338,20 @@ class FileManager {
       });
       
       fileData.forEach(({ file, fullPath, stats }) => {
-        if (rightList) {
+        if (this.rightPaneView === 'list' && rightList) {
           const item = this.createFileItem(file, fullPath, stats);
           rightList.appendChild(item);
         }
-        if (rightGrid) {
+        if (this.rightPaneView === 'grid' && rightGrid) {
           const gridItem = this.createGridItem(file, fullPath, stats);
           rightGrid.appendChild(gridItem);
         }
       });
       
-      // 更新右侧状态栏
       if (rightStatusText) {
         rightStatusText.textContent = `${sortedFiles.length} 个项目`;
       }
       
-      // 自动计算右侧面板文件夹大小
       const calcToken = Date.now();
       this.autoCalcRightPanelSizes(fileData, calcToken);
     }).catch(err => {
@@ -3320,8 +3377,16 @@ class FileManager {
     }
   }
   
-  switchView(view) {
-    this.currentView = view;
+  switchView(view, pane) {
+    if (pane === 'left') {
+      this.leftPaneView = view;
+    } else if (pane === 'right') {
+      this.rightPaneView = view;
+    } else {
+      this.currentView = view;
+      this.leftPaneView = view;
+      this.rightPaneView = view;
+    }
     
     const listBtn = document.getElementById('view-list-btn');
     const gridBtn = document.getElementById('view-grid-btn');
@@ -3332,25 +3397,33 @@ class FileManager {
     const rightListView = document.getElementById('file-list-view-right');
     const rightGridView = document.getElementById('file-grid-view-right');
     
-    if (view === 'list') {
-      listBtn.classList.add('active');
-      gridBtn.classList.remove('active');
-      
-      if (leftListView) leftListView.classList.remove('is-hidden');
-      if (leftGridView) leftGridView.classList.add('is-hidden');
-      if (rightListView) rightListView.classList.remove('is-hidden');
-      if (rightGridView) rightGridView.classList.add('is-hidden');
-    } else if (view === 'grid') {
-      listBtn.classList.remove('active');
-      gridBtn.classList.add('active');
-      
-      if (leftListView) leftListView.classList.add('is-hidden');
-      if (leftGridView) leftGridView.classList.remove('is-hidden');
-      if (rightListView) rightListView.classList.add('is-hidden');
-      if (rightGridView) rightGridView.classList.remove('is-hidden');
+    const applyPaneView = (listView, gridView, paneView) => {
+      if (paneView === 'list') {
+        if (listView) listView.classList.remove('is-hidden');
+        if (gridView) gridView.classList.add('is-hidden');
+      } else if (paneView === 'grid') {
+        if (listView) listView.classList.add('is-hidden');
+        if (gridView) gridView.classList.remove('is-hidden');
+      }
+    };
+    
+    if (!pane || pane === 'left') {
+      applyPaneView(leftListView, leftGridView, this.leftPaneView);
+    }
+    if (!pane || pane === 'right') {
+      applyPaneView(rightListView, rightGridView, this.rightPaneView);
     }
     
-    // 更新子控件视图按钮状态
+    if (!pane) {
+      if (view === 'list') {
+        listBtn?.classList.add('active');
+        gridBtn?.classList.remove('active');
+      } else if (view === 'grid') {
+        listBtn?.classList.remove('active');
+        gridBtn?.classList.add('active');
+      }
+    }
+    
     this.updatePaneViewControls();
   }
   
