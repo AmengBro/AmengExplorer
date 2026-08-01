@@ -5,6 +5,9 @@ module.exports = {
   packagerConfig: {
     asar: true,
     asarUnpack: [],
+    icon: 'explorer.ico',
+    executableName: 'AmengExplorer',
+    appCopyright: 'Copyright © 2026 A萌菌',
     ignore: [
       /^[\\/]rootdir[\\/]/,
       /^[\\/]config[\\/]/,
@@ -16,9 +19,17 @@ module.exports = {
       /^[\\/]\.github[\\/]/,
       /^[\\/]\.vscode[\\/]/,
       /^[\\/]\.idea[\\/]/,
+      /^[\\/]root[\\/]/,
+      /^[\\/]example[\\/]/,
+      /^[\\/]\.trae[\\/]/,
     ],
-    quiet: true,
+    quiet: false,
     overwrite: true,
+    download: {
+      mirrorOptions: {
+        mirror: 'https://npmmirror.com/mirrors/electron/',
+      },
+    },
   },
   rebuildConfig: {},
   makers: [

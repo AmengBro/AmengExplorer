@@ -92,10 +92,16 @@ function cancelTask(taskId) {
 }
 
 function createWindow() {
+  // 设置 Windows 应用用户模型 ID，确保任务栏图标正确显示
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.ameng.explorer');
+  }
+
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 800,
-    title: 'Sigma File Manager',
+    title: 'AmengExplorer',
+    icon: path.join(__dirname, '..', 'explorer.png'),
     frame: false,
     transparent: false,
     titleBarStyle: 'hidden',

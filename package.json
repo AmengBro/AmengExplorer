@@ -1,8 +1,8 @@
 {
-  "name": "amengui",
-  "productName": "amengui",
+  "name": "AmengExplorer",
+  "productName": "AmengExplorer",
   "version": "1.0.0",
-  "description": "My Electron application description",
+  "description": "在windows上体验linux的文件管理",
   "main": "src/index.js",
   "private": true,
   "scripts": {
@@ -31,6 +31,6 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
     "@electron-forge/plugin-fuses": "^7.11.2",
     "@electron/fuses": "^1.8.0",
-    "electron": "^43.1.0"
+    "electron": "41.2.1"
   }
 }
