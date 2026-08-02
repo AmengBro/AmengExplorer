@@ -313,9 +313,29 @@ svg {
   gap: 0;
 }
 
-.window-toolbar-action-layer,
-.window-toolbar-action-layer * {
+.window-toolbar-action-layer {
   -webkit-app-region: drag;
+}
+
+.window-toolbar-action-layer button,
+.window-toolbar-action-layer .tab,
+.window-toolbar-action-layer .tab *,
+.window-toolbar-action-layer .address-bar-input,
+.window-toolbar-action-layer .address-bar-edit-btn,
+.window-toolbar-action-layer .address-bar-edit-btn *,
+.window-toolbar-action-layer .tab-close,
+.window-toolbar-action-layer .tab-close *,
+.window-toolbar-action-layer .tab-icon,
+.window-toolbar-action-layer .tab-icon *,
+.window-toolbar-action-layer .window-toolbar-button,
+.window-toolbar-action-layer .window-toolbar-button *,
+.window-toolbar-action-layer .toolbar-nav-controls,
+.window-toolbar-action-layer .toolbar-nav-controls *,
+.window-toolbar-action-layer .toolbar-sync-controls,
+.window-toolbar-action-layer .toolbar-sync-controls *,
+.window-toolbar-action-layer .file-browser-address-bar,
+.window-toolbar-action-layer .file-browser-address-bar * {
+  -webkit-app-region: no-drag;
 }
 
 .window-toolbar-row {
@@ -370,6 +390,40 @@ svg {
 .window-toolbar-button svg {
   width: 16px;
   height: 16px;
+}
+
+.task-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  color: #fff;
+  pointer-events: none;
+  transition: transform 0.2s ease;
+  z-index: 10;
+}
+
+.task-badge.badge-running {
+  background-color: #0078d4;
+}
+
+.task-badge.badge-paused {
+  background-color: #f0a020;
+}
+
+.task-badge.badge-warning {
+  background-color: #d13438;
+}
+
+#process-panel-btn {
+  position: relative;
 }
 
 .window-toolbar-center {
@@ -643,7 +697,7 @@ svg {
 }
 
 .file-list {
-  padding: 4px 0;
+  padding: 4px 12px;
 }
 
 .file-item {
@@ -924,6 +978,7 @@ svg {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
   gap: 12px;
+  padding: 8px 12px;
 }
 
 .grid-item {
@@ -2163,4 +2218,17 @@ svg {
 
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground));
+}
+
+/* 修复 SVG 图标在按钮内捕获鼠标事件导致焦点丢失的问题 */
+button svg,
+.nav-sidebar-item svg,
+.nav-sidebar-drive svg,
+.context-menu-item svg,
+.file-item svg,
+.grid-item svg,
+.column-item svg,
+.drive-card__icon svg,
+.user-directory-card__icon svg {
+  pointer-events: none;
 }

@@ -76,6 +76,7 @@
   "activity": "shifts_activity",
   "cpu": "brain_circuit",
   "sineWaveDots": "sine_wave_dots",
+  "chart": "chart_multiple",
 
   "refresh": "arrow_repeat_all",
   "back": "arrow_left",

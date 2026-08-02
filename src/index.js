@@ -146,7 +146,7 @@ ipcMain.handle('calc-size-quick', async (event, { dirPath, timeoutMs }) => {
     let settled = false;
     let worker = null;
     let timer = null;
-    const timeout = timeoutMs || 500;
+    const timeout = timeoutMs || 300;
 
     const cleanup = (result) => {
       if (settled) return;

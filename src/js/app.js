@@ -249,9 +249,11 @@ class FileManager {
           if (item) this.handleFileDoubleClick(item);
         });
         list.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
           const item = e.target.closest('.file-item');
-          this.showContextMenu(e.clientX, e.clientY, item);
+          if (item) {
+            e.preventDefault();
+            this.showContextMenu(e.clientX, e.clientY, item);
+          }
         });
       }
       
@@ -266,9 +268,11 @@ class FileManager {
           if (item) this.handleFileDoubleClick(item);
         });
         grid.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
           const item = e.target.closest('.grid-item');
-          this.showContextMenu(e.clientX, e.clientY, item);
+          if (item) {
+            e.preventDefault();
+            this.showContextMenu(e.clientX, e.clientY, item);
+          }
         });
       }
     };
@@ -1111,7 +1115,7 @@ class FileManager {
   }
 
   // 快速计算子文件夹大小（带超时，不进任务面板，用于进入文件夹时自动计算）
-  async calcSizeWithTimeout(dirPath, timeoutMs = 500) {
+  async calcSizeWithTimeout(dirPath, timeoutMs = 300) {
     const isVirtual = await this.vfs.isVirtualPath(dirPath);
     if (isVirtual) {
       return { status: 'virtual', size: 0, fileCount: 0 };
@@ -1146,7 +1150,29 @@ class FileManager {
     });
   }
 
-  // 进入文件夹后自动计算所有子文件夹大小（500ms 超时）
+  // 并发控制：限制同时执行的异步任务数
+  async runWithConcurrency(items, concurrency, asyncFn) {
+    const results = [];
+    let currentIndex = 0;
+    
+    async function runner() {
+      while (currentIndex < items.length) {
+        const index = currentIndex++;
+        try {
+          results[index] = await asyncFn(items[index], index);
+        } catch (err) {
+          results[index] = { status: 'error' };
+        }
+      }
+    }
+    
+    const runners = Array.from({ length: Math.min(concurrency, items.length) }, () => runner());
+    await Promise.all(runners);
+    
+    return results;
+  }
+  
+  // 进入文件夹后自动计算所有子文件夹大小（显示在任务列表中）
   async autoCalcSubfolderSizes(fileData, loadToken) {
     const subdirs = fileData.filter(({ file, stats }) =>
       file.isDirectory && !stats.isVirtual
@@ -1154,19 +1180,114 @@ class FileManager {
 
     if (subdirs.length === 0) return;
 
+    // 取消之前正在进行的自动统计任务
+    if (this._autoCalcTaskId) {
+      const oldTask = this.tasks.find(t => t.id === this._autoCalcTaskId);
+      if (oldTask && oldTask.status === 'running') {
+        this.cancelTask(this._autoCalcTaskId);
+      }
+    }
+
+    // 统一超时 300ms
+    const timeoutMs = 300;
+    
+    // 并发数限制为 5
+    const concurrency = Math.min(5, subdirs.length);
+
+    // 创建任务显示在任务列表中
+    const taskName = `自动统计 (${this.currentPath})`;
+    const task = this.addTask('size', taskName, { targetPath: this.currentPath, autoRemove: true });
+    task.totalFiles = subdirs.length;
+    task.completedFiles = 0;
+    this._autoCalcTaskId = task.id;
+    this.renderTasks();
+
     // 记录发起时的路径，完成后验证是否仍然匹配（防止竞态）
     const calcPath = this.currentPath;
 
-    // 并发启动，每个 500ms 超时
-    const results = await Promise.allSettled(
-      subdirs.map(({ fullPath }) => this.calcSizeWithTimeout(fullPath, 500))
-    );
+    // 使用并发限制执行计算，并跟踪进度
+    const results = new Array(subdirs.length).fill(null);
+    let completedCount = 0;
+    let nextIndex = 0;
+    const taskId = task.id;
+    const updateTask = (updates) => this.updateTask(taskId, updates);
+    const calcSize = (path) => this.calcSizeWithTimeout(path, timeoutMs);
 
-    // 如果 loadToken 已过期（用户已发起新的 loadDirectory），放弃更新
-    if (loadToken !== undefined && this._loadToken !== loadToken) return;
+    async function runner() {
+      while (true) {
+        // 检查是否被取消
+        const currentTask = this.tasks.find(t => t.id === taskId);
+        if (!currentTask || currentTask.cancelled) {
+          break;
+        }
+        
+        // 检查是否暂停
+        if (currentTask.paused) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+        
+        // 使用共享的 nextIndex 获取下一个索引
+        const myIndex = nextIndex++;
+        if (myIndex >= subdirs.length) break;
+        
+        const { fullPath } = subdirs[myIndex];
+        
+        // 更新当前正在处理的文件名
+        const fileName = fullPath.split('/').pop() || fullPath;
+        updateTask({ currentFile: fileName });
+        
+        try {
+          results[myIndex] = await calcSize(fullPath);
+        } catch (err) {
+          results[myIndex] = { status: 'error' };
+        }
+        
+        // 只有在结果成功写入后才增加计数
+        if (results[myIndex]) {
+          completedCount++;
+          const progress = Math.min(100, Math.round((completedCount / subdirs.length) * 100));
+          updateTask({ 
+            completedFiles: completedCount, 
+            progress: progress 
+          });
+        }
+      }
+    }
     
-    // 如果用户已导航到其他路径，放弃更新
-    if (this.currentPath !== calcPath) return;
+    const boundRunner = runner.bind(this);
+    const runners = Array.from({ length: concurrency }, () => boundRunner());
+    await Promise.all(runners);
+
+    // 检查最终状态
+    const finalTask = this.tasks.find(t => t.id === taskId);
+    if (!finalTask || finalTask.cancelled) {
+      return;
+    }
+    
+    // 如果路径已改变，标记任务为取消
+    if (loadToken !== undefined && this._loadToken !== loadToken) {
+      this.cancelTask(taskId);
+      return;
+    }
+    
+    if (this.currentPath !== calcPath) {
+      this.cancelTask(taskId);
+      return;
+    }
+
+    // 检查是否被暂停（暂停时不标记完成，保持暂停状态）
+    if (finalTask.status === 'paused') {
+      return;
+    }
+
+    // 标记任务为完成
+    this.completeTask(taskId);
+    
+    // 清除自动统计任务ID
+    if (this._autoCalcTaskId === taskId) {
+      this._autoCalcTaskId = null;
+    }
 
     // 收集所有面板中的按钮（左侧和右侧）
     const fileLists = [
@@ -1188,6 +1309,7 @@ class FileManager {
     });
     
     results.forEach((result, i) => {
+      if (!result) return;
       const { fullPath } = subdirs[i];
       const matchingBtns = allSizeBtns.filter(btn => btn.dataset.path === fullPath);
       
@@ -1197,11 +1319,11 @@ class FileManager {
         // 如果用户已经手动点击了按钮（正在计算中），不要覆盖
         if (sizeBtn.dataset.loading) return;
         
-        if (result.status === 'fulfilled' && result.value.status === 'ok') {
-          const sizeText = this.formatFileSize(result.value.size);
+        if (result.status === 'ok') {
+          const sizeText = this.formatFileSize(result.size);
           sizeBtn.textContent = sizeText;
           sizeBtn.classList.add('auto-calculated');
-        } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+        } else if (result.status === 'virtual') {
           sizeBtn.textContent = '无';
         } else {
           // 超时或失败，改为"查看"让用户可以手动触发
@@ -1210,16 +1332,16 @@ class FileManager {
       });
       
       // 缓存结果
-      if (result.status === 'fulfilled' && result.value.status === 'ok') {
-        const sizeText = this.formatFileSize(result.value.size);
-        this.sizeCache.set(fullPath, { status: 'ok', size: result.value.size, fileCount: result.value.fileCount, text: sizeText });
-      } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+      if (result.status === 'ok') {
+        const sizeText = this.formatFileSize(result.size);
+        this.sizeCache.set(fullPath, { status: 'ok', size: result.size, fileCount: result.fileCount, text: sizeText });
+      } else if (result.status === 'virtual') {
         this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
       }
     });
   }
   
-  // 右侧面板自动计算文件夹大小
+  // 右侧面板自动计算文件夹大小（显示在任务列表中）
   async autoCalcRightPanelSizes(fileData, loadToken) {
     const subdirs = fileData.filter(({ file, stats }) =>
       file.isDirectory && !stats.isVirtual
@@ -1227,10 +1349,110 @@ class FileManager {
 
     if (subdirs.length === 0) return;
 
-    // 并发启动，每个 500ms 超时
-    const results = await Promise.allSettled(
-      subdirs.map(({ fullPath }) => this.calcSizeWithTimeout(fullPath, 500))
-    );
+    // 取消之前正在进行的右侧自动统计任务
+    if (this._autoCalcRightTaskId) {
+      const oldTask = this.tasks.find(t => t.id === this._autoCalcRightTaskId);
+      if (oldTask && oldTask.status === 'running') {
+        this.cancelTask(this._autoCalcRightTaskId);
+      }
+    }
+
+    // 统一超时 300ms
+    const timeoutMs = 300;
+    
+    // 并发数限制为 5
+    const concurrency = Math.min(5, subdirs.length);
+
+    // 创建任务显示在任务列表中
+    const rightAddressInput = document.getElementById('pane-right-address');
+    const rightPath = rightAddressInput?.value || '/';
+    const taskName = `自动统计 (右: ${rightPath})`;
+    const task = this.addTask('size', taskName, { targetPath: rightPath, autoRemove: true });
+    task.totalFiles = subdirs.length;
+    task.completedFiles = 0;
+    this._autoCalcRightTaskId = task.id;
+    this.renderTasks();
+
+    // 记录发起时的路径，完成后验证是否仍然匹配
+    const calcPath = rightPath;
+
+    // 使用并发限制执行计算，并跟踪进度
+    const results = new Array(subdirs.length).fill(null);
+    let completedCount = 0;
+    let nextIndex = 0;
+    const taskId = task.id;
+    const updateTask = (updates) => this.updateTask(taskId, updates);
+    const calcSize = (path) => this.calcSizeWithTimeout(path, timeoutMs);
+
+    async function runner() {
+      while (true) {
+        // 检查是否被取消
+        const currentTask = this.tasks.find(t => t.id === taskId);
+        if (!currentTask || currentTask.cancelled) {
+          break;
+        }
+        
+        // 检查是否暂停
+        if (currentTask.paused) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+        
+        // 使用共享的 nextIndex 获取下一个索引
+        const myIndex = nextIndex++;
+        if (myIndex >= subdirs.length) break;
+        
+        const { fullPath } = subdirs[myIndex];
+        
+        const fileName = fullPath.split('/').pop() || fullPath;
+        updateTask({ currentFile: fileName });
+        
+        try {
+          results[myIndex] = await calcSize(fullPath);
+        } catch (err) {
+          results[myIndex] = { status: 'error' };
+        }
+        
+        // 只有在结果成功写入后才增加计数
+        if (results[myIndex]) {
+          completedCount++;
+          const progress = Math.min(100, Math.round((completedCount / subdirs.length) * 100));
+          updateTask({ 
+            completedFiles: completedCount, 
+            progress: progress 
+          });
+        }
+      }
+    }
+    
+    const boundRunner = runner.bind(this);
+    const runners = Array.from({ length: concurrency }, () => boundRunner());
+    await Promise.all(runners);
+
+    // 检查最终状态
+    const finalTask = this.tasks.find(t => t.id === taskId);
+    if (!finalTask || finalTask.cancelled) {
+      return;
+    }
+    
+    const rightAddrEl = document.getElementById('pane-right-address');
+    if (rightAddrEl && rightAddrEl.value !== calcPath) {
+      this.cancelTask(taskId);
+      return;
+    }
+
+    // 检查是否被暂停（暂停时不标记完成，保持暂停状态）
+    if (finalTask.status === 'paused') {
+      return;
+    }
+
+    // 标记任务为完成
+    this.completeTask(taskId);
+    
+    // 清除自动统计任务ID
+    if (this._autoCalcRightTaskId === taskId) {
+      this._autoCalcRightTaskId = null;
+    }
 
     // 只收集右侧面板的按钮
     const rightList = document.getElementById('file-list-right');
@@ -1245,6 +1467,7 @@ class FileManager {
     }
     
     results.forEach((result, i) => {
+      if (!result) return;
       const { fullPath } = subdirs[i];
       const matchingBtns = rightSizeBtns.filter(btn => btn.dataset.path === fullPath);
       
@@ -1254,11 +1477,11 @@ class FileManager {
         // 如果用户已经手动点击了按钮（正在计算中），不要覆盖
         if (sizeBtn.dataset.loading) return;
         
-        if (result.status === 'fulfilled' && result.value.status === 'ok') {
-          const sizeText = this.formatFileSize(result.value.size);
+        if (result.status === 'ok') {
+          const sizeText = this.formatFileSize(result.size);
           sizeBtn.textContent = sizeText;
           sizeBtn.classList.add('auto-calculated');
-        } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+        } else if (result.status === 'virtual') {
           sizeBtn.textContent = '无';
         } else {
           // 超时或失败，改为"查看"让用户可以手动触发
@@ -1267,10 +1490,10 @@ class FileManager {
       });
       
       // 缓存结果（左右面板共享缓存）
-      if (result.status === 'fulfilled' && result.value.status === 'ok') {
-        const sizeText = this.formatFileSize(result.value.size);
-        this.sizeCache.set(fullPath, { status: 'ok', size: result.value.size, fileCount: result.value.fileCount, text: sizeText });
-      } else if (result.status === 'fulfilled' && result.value.status === 'virtual') {
+      if (result.status === 'ok') {
+        const sizeText = this.formatFileSize(result.size);
+        this.sizeCache.set(fullPath, { status: 'ok', size: result.size, fileCount: result.fileCount, text: sizeText });
+      } else if (result.status === 'virtual') {
         this.sizeCache.set(fullPath, { status: 'virtual', text: '无' });
       }
     });
@@ -2392,7 +2615,7 @@ class FileManager {
       this.updateTask(task.id, {
         currentFile: fileName,
         completedFiles: i
-      });
+      }, true);
       
       let counter = 1;
       while (await this.vfs.exists(destPath)) {
@@ -2421,7 +2644,7 @@ class FileManager {
       this.updateTask(task.id, {
         completedFiles: i + 1,
         progress: ((i + 1) / this.copyBuffer.length) * 100
-      });
+      }, true);
     }
     
     if (!task.cancelled) {
@@ -2777,6 +3000,31 @@ class FileManager {
     }
   }
   
+  updateTaskPanelButton() {
+    const btn = document.getElementById('process-panel-btn');
+    const badge = document.getElementById('task-badge');
+    if (!btn || !badge) return;
+    
+    const runningCount = this.tasks.filter(t => t.status === 'running').length;
+    const pausedCount = this.tasks.filter(t => t.status === 'paused').length;
+    const activeCount = runningCount + pausedCount;
+    
+    if (activeCount > 0) {
+      badge.hidden = false;
+      badge.textContent = activeCount > 99 ? '99+' : activeCount;
+      // 根据状态设置颜色
+      if (pausedCount > 0 && runningCount === 0) {
+        badge.classList.remove('badge-running', 'badge-warning');
+        badge.classList.add('badge-paused');
+      } else if (runningCount > 0) {
+        badge.classList.remove('badge-paused', 'badge-warning');
+        badge.classList.add('badge-running');
+      }
+    } else {
+      badge.hidden = true;
+    }
+  }
+  
   addTask(type, name, opts = {}) {
     const taskId = `task-${this.taskIdCounter++}`;
     const task = {
@@ -2791,18 +3039,24 @@ class FileManager {
       completedFiles: 0,
       totalSize: 0,
       completedSize: 0,
-      cancelled: false
+      cancelled: false,
+      autoRemove: !!opts.autoRemove
     };
     this.tasks.push(task);
     this.renderTasks();
     return task;
   }
   
-  updateTask(taskId, updates) {
+  updateTask(taskId, updates, forceRender = false) {
     const task = this.tasks.find(t => t.id === taskId);
     if (task) {
       Object.assign(task, updates);
-      this.renderTasks();
+      if (forceRender) {
+        this._renderTasksScheduled = false;
+        this._doRenderTasks();
+      } else {
+        this.renderTasks();
+      }
     }
   }
   
@@ -2811,7 +3065,14 @@ class FileManager {
     if (task) {
       task.status = 'completed';
       task.progress = 100;
+      if (task.autoRemove) {
+        setTimeout(() => {
+          this.removeTask(taskId);
+          this.updateTaskPanelButton();
+        }, 1500);
+      }
       this.renderTasks();
+      this.updateTaskPanelButton();
     }
   }
   
@@ -2820,7 +3081,14 @@ class FileManager {
     if (task) {
       task.cancelled = true;
       task.status = 'cancelled';
+      if (task.autoRemove) {
+        setTimeout(() => {
+          this.removeTask(taskId);
+          this.updateTaskPanelButton();
+        }, 1500);
+      }
       this.renderTasks();
+      this.updateTaskPanelButton();
     }
   }
 
@@ -2885,7 +3153,21 @@ class FileManager {
   }
 
   renderTasks() {
+    // 防抖：合并多次快速更新，避免频繁 DOM 重建
+    if (this._renderTasksScheduled) return;
+    this._renderTasksScheduled = true;
+    requestAnimationFrame(() => {
+      this._renderTasksScheduled = false;
+      this._doRenderTasks();
+    });
+  }
+
+  _doRenderTasks() {
     const content = this.processPanelContent;
+    if (!content) return;
+    
+    // 更新任务面板按钮徽章
+    this.updateTaskPanelButton();
     
     if (this.tasks.length === 0) {
       content.innerHTML = `
@@ -2927,7 +3209,7 @@ class FileManager {
     this.tasks.forEach(task => {
       const icon = task.type === 'copy' ? this.icons.copy : 
                    task.type === 'move' ? this.icons.cut : 
-                   task.type === 'size' ? this.icons.info : this.icons.activity;
+                   task.type === 'size' ? this.icons.chart : this.icons.activity;
       
       const statusText = task.status === 'running' ? '进行中' : 
                          task.status === 'completed' ? '已完成' : '已取消';
@@ -3301,12 +3583,15 @@ class FileManager {
       }
     }
     
+    // 清空两个容器，确保没有残留数据
+    if (rightList) rightList.innerHTML = '';
+    if (rightGrid) rightGrid.innerHTML = '';
+    
+    // 根据视图类型显示对应容器
     if (this.rightPaneView === 'list') {
-      if (rightList) rightList.innerHTML = '';
       if (rightListView) rightListView.classList.remove('is-hidden');
       if (rightGridView) rightGridView.classList.add('is-hidden');
     } else if (this.rightPaneView === 'grid') {
-      if (rightGrid) rightGrid.innerHTML = '';
       if (rightListView) rightListView.classList.add('is-hidden');
       if (rightGridView) rightGridView.classList.remove('is-hidden');
     }
@@ -3378,11 +3663,16 @@ class FileManager {
   }
   
   switchView(view, pane) {
+    let needReload = false;
+    
     if (pane === 'left') {
+      if (this.leftPaneView !== view) needReload = true;
       this.leftPaneView = view;
     } else if (pane === 'right') {
+      if (this.rightPaneView !== view) needReload = true;
       this.rightPaneView = view;
     } else {
+      if (this.currentView !== view) needReload = true;
       this.currentView = view;
       this.leftPaneView = view;
       this.rightPaneView = view;
@@ -3425,6 +3715,28 @@ class FileManager {
     }
     
     this.updatePaneViewControls();
+    
+    // 如果视图发生了变化，重新加载数据
+    if (needReload) {
+      if (pane === 'right') {
+        const rightAddressInput = document.getElementById('pane-right-address');
+        const rightPath = rightAddressInput?.value || '/';
+        this.loadRightPanel(rightPath, false);
+      } else if (pane === 'left') {
+        // 左侧面板视图变化时，重新加载当前目录
+        if (this.currentPath) {
+          this.loadDirectory(this.currentPath);
+        }
+      } else if (!pane) {
+        // 全局视图切换时，同步刷新两侧
+        this.loadDirectory(this.currentPath);
+        const rightAddressInput = document.getElementById('pane-right-address');
+        if (rightAddressInput) {
+          const rightPath = rightAddressInput.value;
+          this.loadRightPanel(rightPath, false);
+        }
+      }
+    }
   }
   
   initSidebar() {
