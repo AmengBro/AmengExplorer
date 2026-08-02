@@ -4,24 +4,39 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
-    asarUnpack: [],
+    asarUnpack: [
+      /amsys\.exe$/,
+      /getfl\.exe$/,
+      /config\.ini$/,
+    ],
     icon: 'explorer.ico',
     executableName: 'AmengExplorer',
     appCopyright: 'Copyright © 2026 A萌菌',
     ignore: [
-      /^[\\/]rootdir[\\/]/,
-      /^[\\/]config[\\/]/,
+      // 版本控制与编辑器配置
       /^[\\/]\.git[\\/]/,
-      /^[\\/]scripts[\\/]/,
-      /^[\\/]README\.md$/,
-      /^[\\/]LICENSE$/,
-      /^[\\/]CONTRIBUTING\.md$/,
       /^[\\/]\.github[\\/]/,
       /^[\\/]\.vscode[\\/]/,
       /^[\\/]\.idea[\\/]/,
+      /^[\\/]\.trae[\\/]/,
+      // 开发缓存与打包临时文件
+      /^[\\/]\.electron_cache[\\/]/,
+      /\.tar(\.gz|\.bz2|\.xz|\.zip)?$/,
+      /^[\\/]node_modules\.tar$/,
+      // 项目源码中非运行时目录
       /^[\\/]root[\\/]/,
       /^[\\/]example[\\/]/,
-      /^[\\/]\.trae[\\/]/,
+      /^[\\/]docs[\\/]/,
+      // 根目录下仅用于开发/说明的文件
+      /^[\\/]README\.md$/,
+      /^[\\/]LICENSE$/,
+      /^[\\/]CONTRIBUTING\.md$/,
+      /^[\\/]filesystem-architecture\.md$/,
+      /^[\\/]use-pipe\.md$/,
+      /^[\\/]want\.md$/,
+      /^[\\/]\.gitignore$/,
+      /^[\\/]\.gitattributes$/,
+      /^[\\/]package-lock\.json$/,
     ],
     quiet: false,
     overwrite: true,

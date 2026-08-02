@@ -236,6 +236,21 @@ class FileManager {
       this.deselectAll();
     });
     
+    // 分层面板的全选/取消选择按钮
+    document.querySelectorAll('.pane-select-all').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.selectAll(btn.dataset.pane);
+      });
+    });
+    
+    document.querySelectorAll('.pane-deselect').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deselectAll(btn.dataset.pane);
+      });
+    });
+    
     // 绑定左右面板的事件
     const bindEvents = (listId, gridId) => {
       const list = document.getElementById(listId);
@@ -590,6 +605,12 @@ class FileManager {
       checkCancelled();
       if (typeof this.updateStatusBar === 'function') {
         this.updateStatusBar(sortedFiles.length);
+      }
+      
+      // 更新左侧面板状态条
+      const leftStatusText = document.querySelector('#file-pane-left .pane-status-text');
+      if (leftStatusText) {
+        leftStatusText.textContent = `${sortedFiles.length} 个项目`;
       }
       
       const tab = document.querySelector(`[data-tab-id="${this.currentTabId}"]`);
@@ -1691,18 +1712,32 @@ class FileManager {
     const addressBar = document.querySelector('.file-browser-address-bar');
     const tabBar = document.querySelector('.tab-bar');
     const fileBrowserToolbar = document.querySelector('.file-browser-toolbar');
-    const fileBrowserStatusBar = document.getElementById('file-browser-status-bar');
+    const globalStatusBar = document.getElementById('file-browser-status-bar');
     const navigatorToolbar = document.querySelector('.navigator-toolbar-actions');
     const rightPane = document.getElementById('file-pane-right');
     const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+    const leftPaneStatusBar = document.querySelector('#file-pane-left .pane-status-bar');
+    const rightPaneStatusBar = document.querySelector('#file-pane-right .pane-status-bar');
     
     if (homePage) homePage.classList.add('is-hidden');
     if (fileBrowserContent) fileBrowserContent.classList.remove('is-hidden');
     if (addressBar && !isSplitView) addressBar.classList.remove('is-hidden');
     if (tabBar) tabBar.classList.remove('is-hidden');
     if (fileBrowserToolbar) fileBrowserToolbar.classList.remove('is-hidden');
-    if (fileBrowserStatusBar) fileBrowserStatusBar.classList.remove('is-hidden');
     if (navigatorToolbar) navigatorToolbar.classList.remove('is-hidden');
+    
+    // 根据分栏状态初始化底栏
+    if (isSplitView) {
+      // 分栏视图：隐藏全局底栏，显示各面板底栏
+      if (globalStatusBar) globalStatusBar.classList.add('is-hidden');
+      if (leftPaneStatusBar) leftPaneStatusBar.classList.remove('is-hidden');
+      if (rightPaneStatusBar) rightPaneStatusBar.classList.remove('is-hidden');
+    } else {
+      // 单面板视图：显示全局底栏，隐藏面板底栏
+      if (globalStatusBar) globalStatusBar.classList.remove('is-hidden');
+      if (leftPaneStatusBar) leftPaneStatusBar.classList.add('is-hidden');
+      if (rightPaneStatusBar) rightPaneStatusBar.classList.add('is-hidden');
+    }
   }
   
   renderUserDirectories() {
@@ -2052,26 +2087,42 @@ class FileManager {
     }
   }
   
-  selectAll() {
-    this.deselectAll();
-    document.querySelectorAll('.file-item, .grid-item').forEach(item => {
+  selectAll(pane = null) {
+    this.deselectAll(pane);
+    let selector = '.file-item, .grid-item';
+    if (pane === 'left') {
+      selector = '#file-pane-left .file-item, #file-pane-left .grid-item';
+    } else if (pane === 'right') {
+      selector = '#file-pane-right .file-item, #file-pane-right .grid-item';
+    }
+    document.querySelectorAll(selector).forEach(item => {
       item.classList.add('selected');
-      this.selectedItems.push(item.dataset.path);
-    });
-    document.querySelectorAll('.column-item').forEach(item => {
-      item.dataset.selected = 'true';
-      this.selectedItems.push(item.dataset.path);
+      if (item.dataset.path && !this.selectedItems.includes(item.dataset.path)) {
+        this.selectedItems.push(item.dataset.path);
+      }
     });
   }
   
-  deselectAll() {
-    document.querySelectorAll('.file-item, .grid-item').forEach(item => {
+  deselectAll(pane = null) {
+    let selector = '.file-item, .grid-item';
+    if (pane === 'left') {
+      selector = '#file-pane-left .file-item, #file-pane-left .grid-item';
+    } else if (pane === 'right') {
+      selector = '#file-pane-right .file-item, #file-pane-right .grid-item';
+    }
+    document.querySelectorAll(selector).forEach(item => {
       item.classList.remove('selected');
     });
-    document.querySelectorAll('.column-item').forEach(item => {
-      delete item.dataset.selected;
+    // Remove deselected pane items from selectedItems
+    document.querySelectorAll('.file-item, .grid-item').forEach(item => {
+      if (!item.classList.contains('selected') && item.dataset.path) {
+        const idx = this.selectedItems.indexOf(item.dataset.path);
+        if (idx > -1) this.selectedItems.splice(idx, 1);
+      }
     });
-    this.selectedItems = [];
+    if (!pane) {
+      this.selectedItems = [];
+    }
   }
   
   createNewFile() {
@@ -3492,6 +3543,9 @@ class FileManager {
     const rightPaneViewControls = document.querySelector('#file-pane-right .pane-view-controls');
     const topListViewBtn = document.getElementById('view-list-btn');
     const topGridViewBtn = document.getElementById('view-grid-btn');
+    const globalStatusBar = document.getElementById('file-browser-status-bar');
+    const leftPaneStatusBar = document.querySelector('#file-pane-left .pane-status-bar');
+    const rightPaneStatusBar = document.querySelector('#file-pane-right .pane-status-bar');
     
     if (rightPane && divider) {
       if (rightPane.classList.contains('is-hidden')) {
@@ -3512,6 +3566,11 @@ class FileManager {
         if (rightPaneHeader) rightPaneHeader.classList.remove('is-hidden');
         if (leftPaneViewControls) leftPaneViewControls.classList.remove('is-hidden');
         if (rightPaneViewControls) rightPaneViewControls.classList.remove('is-hidden');
+        
+        // 分栏视图：隐藏全局底栏，显示各面板底栏
+        if (globalStatusBar) globalStatusBar.classList.add('is-hidden');
+        if (leftPaneStatusBar) leftPaneStatusBar.classList.remove('is-hidden');
+        if (rightPaneStatusBar) rightPaneStatusBar.classList.remove('is-hidden');
         
         // 初始化右侧历史
         this.rightPaneHistory = [this.currentPath || '/'];
@@ -3540,6 +3599,11 @@ class FileManager {
         // 隐藏子控件：所有 pane-header（单面板模式下不需要）
         if (leftPaneHeader) leftPaneHeader.classList.add('is-hidden');
         if (rightPaneHeader) rightPaneHeader.classList.add('is-hidden');
+        
+        // 单面板视图：显示全局底栏，隐藏面板底栏
+        if (globalStatusBar) globalStatusBar.classList.remove('is-hidden');
+        if (leftPaneStatusBar) leftPaneStatusBar.classList.add('is-hidden');
+        if (rightPaneStatusBar) rightPaneStatusBar.classList.add('is-hidden');
       }
     }
   }

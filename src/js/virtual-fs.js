@@ -1,5 +1,12 @@
 const AmsysClient = require('./amsys-client');
 
+function resolveAppRoot() {
+  if (__dirname.includes('app.asar')) {
+    return path.join(__dirname.split('app.asar')[0], 'app.asar.unpacked');
+  }
+  return path.join(__dirname, '..', '..');
+}
+
 class VirtualFileSystem {
   constructor() {
     this.fs = require('fs');
@@ -15,7 +22,7 @@ class VirtualFileSystem {
 
   initConfig() {
     try {
-      const configPath = this.path.join(__dirname, '..', '..', 'config.ini');
+      const configPath = this.path.join(resolveAppRoot(), 'config.ini');
       if (this.fs.existsSync(configPath)) {
         const content = this.fs.readFileSync(configPath, 'utf-8');
         const match = content.match(/^\s*root\s*=\s*(.+)$/m);

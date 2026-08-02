@@ -1,10 +1,20 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+
+function resolveExecutable(name) {
+    if (__dirname.includes('app.asar')) {
+        const unpackedDir = path.join(__dirname.split('app.asar')[0], 'app.asar.unpacked');
+        const exePath = path.join(unpackedDir, name);
+        if (fs.existsSync(exePath)) return exePath;
+    }
+    return path.join(__dirname, '..', '..', name);
+}
 
 class AmsysClient {
     constructor(amsysPath) {
         if (!amsysPath) {
-            amsysPath = path.join(__dirname, '..', '..', 'amsys.exe');
+            amsysPath = resolveExecutable('amsys.exe');
         }
         this.amsysPath = amsysPath;
         this.proc = null;

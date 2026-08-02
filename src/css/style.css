@@ -956,6 +956,16 @@ svg {
   flex-shrink: 0;
 }
 
+.pane-status-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.pane-status-actions .status-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .pane-status-text {
   white-space: nowrap;
 }
