@@ -41,6 +41,7 @@ module.exports = {
     quiet: false,
     overwrite: true,
     download: {
+      cacheRoot: 'I:/Data-数据区/应用/自制/AmengExplorer/.electron_cache',
       mirrorOptions: {
         mirror: 'https://npmmirror.com/mirrors/electron/',
       },
