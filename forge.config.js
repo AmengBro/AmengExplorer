@@ -3,12 +3,12 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 module.exports = {
   packagerConfig: {
-    asar: true,
-    asarUnpack: [
-      /amsys\.exe$/,
-      /getfl\.exe$/,
-      /config\.ini$/,
-    ],
+    // electron-packager v18 的 asar 选项使用 glob 字符串解包（顶层 asarUnpack 已不支持）
+    // amsys.exe 是原生程序，必须解包到 app.asar.unpacked 才能被 spawn；
+    // 虚拟根数据 root/ 也一并解包，保证打包后 amsys 能挂载虚拟文件系统
+    asar: {
+      unpack: '**/{amsys.exe,getfl.exe,config.ini,root/**}',
+    },
     icon: 'explorer.ico',
     executableName: 'AmengExplorer',
     appCopyright: 'Copyright © 2026 A萌菌',
@@ -24,7 +24,6 @@ module.exports = {
       /\.tar(\.gz|\.bz2|\.xz|\.zip)?$/,
       /^[\\/]node_modules\.tar$/,
       // 项目源码中非运行时目录
-      /^[\\/]root[\\/]/,
       /^[\\/]example[\\/]/,
       /^[\\/]docs[\\/]/,
       // 根目录下仅用于开发/说明的文件

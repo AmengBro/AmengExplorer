@@ -1,39 +1,121 @@
 const AmsysClient = require('./amsys-client');
-
-function resolveAppRoot() {
-  if (__dirname.includes('app.asar')) {
-    return path.join(__dirname.split('app.asar')[0], 'app.asar.unpacked');
-  }
-  return path.join(__dirname, '..', '..');
-}
+const UserConfig = require('./user-config');
+const path = require('path');
 
 class VirtualFileSystem {
   constructor() {
     this.fs = require('fs');
     this.path = require('path');
-    
-    this.amsysClient = new AmsysClient();
+    this.os = require('os');
+
+    // 用户配置在 amsys 解析出虚拟根后加载（全部路径解析追随 amsys）
+    this.userConfig = null;
+    this.currentUser = 'root';
+    this.amsysClient = new AmsysClient(null);
     this.root_ = '';
     this.mounts_ = {};
-    
-    this.initConfig();
-    this.init();
+
+    this.ready = this.init();
   }
 
-  initConfig() {
-    try {
-      const configPath = this.path.join(resolveAppRoot(), 'config.ini');
-      if (this.fs.existsSync(configPath)) {
-        const content = this.fs.readFileSync(configPath, 'utf-8');
-        const match = content.match(/^\s*root\s*=\s*(.+)$/m);
-        if (match) {
-          this.root_ = match[1].trim();
-          console.log('VirtualFileSystem: root from config:', this.root_);
+  initUserPaths() {
+    const winHomeBase = this.getWindowsHomeBasePath();
+
+    this.userPaths = {
+      home: this.userConfig.getHomePath(),
+      desktop: this.userConfig.getDesktopPath(),
+      documents: this.userConfig.getDocumentsPath(),
+      downloads: this.userConfig.getDownloadsPath(),
+      pictures: this.userConfig.getPicturesPath(),
+      videos: this.userConfig.getVideosPath(),
+      music: this.userConfig.getMusicPath(),
+      recycleBin: this.userConfig.getRecycleBinPath(),
+      // Windows 映射统一指向虚拟根，与 amsys 的列表解析保持一致
+      windows: {
+        home: winHomeBase,
+        desktop: this.path.join(winHomeBase, 'Desktop'),
+        documents: this.path.join(winHomeBase, 'Documents'),
+        downloads: this.path.join(winHomeBase, 'Downloads'),
+        pictures: this.path.join(winHomeBase, 'Pictures'),
+        videos: this.path.join(winHomeBase, 'Videos'),
+        music: this.path.join(winHomeBase, 'Music'),
+        recycleBin: this.path.join(winHomeBase, 'Trash')
+      }
+    };
+
+    // Automatically create user directories if they don't exist
+    this.ensureUserDirectories();
+  }
+
+  ensureUserDirectories() {
+    // 虚拟根尚未解析时先不创建目录，避免在错误位置留下空壳
+    if (!this.root_) return;
+
+    const windowsPaths = this.userPaths.windows;
+    const dirsToCreate = [
+      windowsPaths.home,
+      windowsPaths.desktop,
+      windowsPaths.documents,
+      windowsPaths.downloads,
+      windowsPaths.pictures,
+      windowsPaths.videos,
+      windowsPaths.music,
+    ];
+
+    for (const dir of dirsToCreate) {
+      if (dir && !this.fs.existsSync(dir)) {
+        try {
+          this.fs.mkdirSync(dir, { recursive: true });
+          console.log('VirtualFileSystem: created user directory:', dir);
+        } catch (err) {
+          console.warn('VirtualFileSystem: failed to create directory', dir, ':', err.message);
         }
       }
-    } catch (err) {
-      console.error('VirtualFileSystem initConfig error:', err);
     }
+  }
+
+  switchUser(username) {
+    if (this.currentUser === username) return;
+
+    console.log(`VirtualFileSystem: switching user from "${this.currentUser}" to "${username}"`);
+    this.currentUser = username;
+    this.userConfig.setCurrentUser(username);
+    this.amsysClient.setUser(username);
+    this.initUserPaths();
+  }
+
+  getCurrentUser() {
+    return this.currentUser;
+  }
+
+  getUserPaths() {
+    return this.userPaths;
+  }
+
+  getWindowsHomeBasePath() {
+    const rootBase = this.root_ || this.path.join(this.os.homedir(), 'AmengExplorerRoot');
+    // 与 user-config 的 home 约定一致：root -> <root>\root，其他用户 -> <root>\home\<user>
+    return this.currentUser === 'root'
+      ? this.path.join(rootBase, 'root')
+      : this.path.join(rootBase, 'home', this.currentUser);
+  }
+
+  getTrashWindowsPath() {
+    return this.path.join(this.getWindowsHomeBasePath(), 'Trash');
+  }
+
+  getTrashPath() {
+    const trashWin = this.getTrashWindowsPath();
+    if (!this.fs.existsSync(trashWin)) {
+      try {
+        this.fs.mkdirSync(trashWin, { recursive: true });
+      } catch (err) {
+        console.warn('Failed to create trash directory:', err.message);
+      }
+    }
+    const homeUnix = this.userPaths.home;
+    const trashUnix = homeUnix === '/' ? `/${this.currentUser}/Trash` : homeUnix + '/Trash';
+    return { win: trashWin, unix: trashUnix };
   }
 
   async init() {
@@ -41,31 +123,47 @@ class VirtualFileSystem {
       if (!this.root_) {
         const result = await this.amsysClient.resolve('/');
         if (result.success && result.winPath) {
-          this.root_ = result.winPath;
+          // amsys 的 root 可能是相对路径（如 .\root\），相对其自身工作目录解析，
+          // 归一化为绝对路径，避免受渲染进程 cwd 影响
+          this.root_ = this.path.isAbsolute(result.winPath)
+            ? result.winPath
+            : this.path.resolve(this.amsysClient.execDir, result.winPath);
         } else {
           this.root_ = require('os').homedir() + '\\AmengExplorerRoot';
         }
       }
+
+      // 用户配置完全以 amsys 解析出的虚拟根为准
+      this.userConfig = new UserConfig(this.root_);
+      this.currentUser = this.userConfig.getCurrentUser();
+      if (this.currentUser !== 'root') {
+        this.amsysClient.setUser(this.currentUser);
+      }
+
+      this.initUserPaths();
     } catch (err) {
       console.error('VirtualFileSystem init error:', err);
       if (!this.root_) {
         this.root_ = require('os').homedir() + '\\AmengExplorerRoot';
       }
+      this.userConfig = this.userConfig || new UserConfig(this.root_);
+      this.currentUser = this.userConfig.getCurrentUser();
+      this.initUserPaths();
     }
   }
 
   normalizeUnix(unixPath) {
     if (!unixPath) return '/';
-    
+
     let p = unixPath.replace(/\\/g, '/');
-    
+
     if (p[0] !== '/') {
       p = '/' + p;
     }
-    
+
     const parts = p.split('/').filter(p => p);
     const result = [];
-    
+
     for (const part of parts) {
       if (part === '.') continue;
       if (part === '..') {
@@ -76,9 +174,9 @@ class VirtualFileSystem {
         result.push(part);
       }
     }
-    
+
     if (result.length === 0) return '/';
-    
+
     return '/' + result.join('/');
   }
 
@@ -107,6 +205,12 @@ class VirtualFileSystem {
   }
 
   async toWindows(unixPath) {
+    // First try user-specific path resolution
+    const userWindowsPath = this.getUserWindowsPath(unixPath);
+    if (userWindowsPath) {
+      return userWindowsPath;
+    }
+
     try {
       const result = await this.amsysClient.toWindows(unixPath);
       if (result.success && result.winPath) {
@@ -114,8 +218,41 @@ class VirtualFileSystem {
       }
     } catch (err) {
     }
-    
+
     return '';
+  }
+
+  getUserWindowsPath(unixPath) {
+    if (!unixPath) return null;
+
+    const paths = this.userPaths;
+    const normalized = this.normalizeUnix(unixPath);
+
+    // Check if path matches a user-specific path
+    // More specific paths should be checked first
+    const userPathMappings = [
+      { unix: paths.recycleBin, windows: paths.windows.recycleBin },
+      { unix: paths.desktop, windows: paths.windows.desktop },
+      { unix: paths.documents, windows: paths.windows.documents },
+      { unix: paths.downloads, windows: paths.windows.downloads },
+      { unix: paths.pictures, windows: paths.windows.pictures },
+      { unix: paths.videos, windows: paths.windows.videos },
+      { unix: paths.music, windows: paths.windows.music },
+      { unix: paths.home, windows: paths.windows.home },
+    ];
+
+    for (const mapping of userPathMappings) {
+      if (normalized === mapping.unix || normalized.startsWith(mapping.unix + '/')) {
+        const suffix = normalized.slice(mapping.unix.length);
+        if (!suffix || suffix === '') {
+          return mapping.windows;
+        } else {
+          return this.path.join(mapping.windows, suffix.replace(/\//g, '\\'));
+        }
+      }
+    }
+
+    return null;
   }
 
   async toUnix(windowsPath) {
@@ -123,16 +260,22 @@ class VirtualFileSystem {
     while (win.endsWith('\\')) {
       win = win.slice(0, -1);
     }
-    
+
     if (!win) return '/';
-    
+
+    // Check for user-specific paths first
+    const userUnixPath = this.getUserUnixPath(win);
+    if (userUnixPath) {
+      return userUnixPath;
+    }
+
     if (this.root_ && win.toLowerCase().startsWith(this.root_.toLowerCase())) {
       const suffix = win.substr(this.root_.length);
       const cleanSuffix = suffix.startsWith('\\') ? suffix.substr(1) : suffix;
       if (!cleanSuffix) return '/';
       return '/' + cleanSuffix.replace(/\\/g, '/');
     }
-    
+
     const driveMatch = win.match(/^([A-Za-z]):\\(.*)$/);
     if (driveMatch) {
       const driveLetter = driveMatch[1].toLowerCase();
@@ -142,8 +285,38 @@ class VirtualFileSystem {
       }
       return '/media/' + driveLetter;
     }
-    
+
     return '/';
+  }
+
+  getUserUnixPath(windowsPath) {
+    const paths = this.userPaths;
+    const winLower = windowsPath.toLowerCase();
+
+    const userPathMappings = [
+      { windows: paths.windows.recycleBin, unix: paths.recycleBin },
+      { windows: paths.windows.home, unix: paths.home },
+      { windows: paths.windows.desktop, unix: paths.desktop },
+      { windows: paths.windows.documents, unix: paths.documents },
+      { windows: paths.windows.downloads, unix: paths.downloads },
+      { windows: paths.windows.pictures, unix: paths.pictures },
+      { windows: paths.windows.videos, unix: paths.videos },
+      { windows: paths.windows.music, unix: paths.music },
+    ];
+
+    for (const mapping of userPathMappings) {
+      if (!mapping.windows) continue;
+      if (winLower === mapping.windows.toLowerCase() || winLower.startsWith(mapping.windows.toLowerCase() + '\\')) {
+        const suffix = windowsPath.slice(mapping.windows.length);
+        if (!suffix || suffix === '') {
+          return mapping.unix;
+        } else {
+          return mapping.unix + suffix.replace(/\\/g, '/');
+        }
+      }
+    }
+
+    return null;
   }
 
   async exists(unixPath) {
@@ -160,6 +333,28 @@ class VirtualFileSystem {
       const result = await this.amsysClient.resolve(unixPath);
       if (result.success) {
         if (result.type === 'virtual') {
+          if (result.path && result.path.isDir) {
+            return {
+              isDirectory: () => true,
+              isFile: () => false,
+              size: 0,
+              mtime: new Date()
+            };
+          }
+
+          const knownPaths = ['/', '/home', '/root', '/usr', '/tmp', '/media', '/mnt'];
+          const normalized = this.normalizeUnix(unixPath);
+          const isKnownVirtual = knownPaths.some(p => normalized === p || normalized.startsWith(p + '/'));
+
+          if (!isKnownVirtual) {
+            throw new Error('Virtual path not found: ' + unixPath);
+          }
+
+          let winPath = this.unixToWindowsPath(unixPath);
+          if (winPath && this.fs.existsSync(winPath)) {
+            return this.fs.statSync(winPath);
+          }
+
           return {
             isDirectory: () => true,
             isFile: () => false,
@@ -167,45 +362,33 @@ class VirtualFileSystem {
             mtime: new Date()
           };
         }
-        
+
         if (result.type === 'real') {
           let winPath = null;
-          
+
           if (result.winPath) {
             winPath = result.winPath;
-            try {
-              if (this.fs.existsSync(winPath)) {
-                return this.fs.statSync(winPath);
-              }
-            } catch (e) {
-            }
-          }
-          
-          winPath = this.unixToWindowsPath(unixPath);
-          if (winPath) {
-            try {
+            if (this.fs.existsSync(winPath)) {
               return this.fs.statSync(winPath);
-            } catch (fsErr) {
-              console.warn('VirtualFileSystem stat: fs.statSync failed for:', winPath, 'error:', fsErr.message);
-              // stat 失败（如系统锁定文件 pagefile.sys）时，
-              // 根据路径名判断：有扩展名的大概率是文件，否则当作目录
-              const lastSep = Math.max(winPath.lastIndexOf('\\'), winPath.lastIndexOf('/'));
-              const baseName = lastSep >= 0 ? winPath.substring(lastSep + 1) : winPath;
-              const hasExt = baseName.includes('.') && !baseName.startsWith('.');
-              return {
-                isDirectory: () => !hasExt,
-                isFile: () => hasExt,
-                size: 0,
-                mtime: new Date()
-              };
             }
           }
+
+          winPath = this.unixToWindowsPath(unixPath);
+          if (winPath && this.fs.existsSync(winPath)) {
+            return this.fs.statSync(winPath);
+          }
+
+          throw new Error('Path does not exist: ' + (winPath || unixPath));
         }
       }
     } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('not found') || msg.includes('does not exist') || msg.includes('Path does not exist')) {
+        throw err;
+      }
       console.error('VirtualFileSystem stat error:', err);
     }
-    
+
     throw new Error('File not found');
   }
 
@@ -276,10 +459,10 @@ class VirtualFileSystem {
   async getFileSize(unixPath) {
     try {
       const resolveResult = await this.amsysClient.resolve(unixPath);
-      
+
       if (resolveResult.success && resolveResult.type === 'real') {
         let winPath = null;
-        
+
         if (resolveResult.winPath) {
           winPath = resolveResult.winPath;
           try {
@@ -289,7 +472,7 @@ class VirtualFileSystem {
           } catch (e) {
           }
         }
-        
+
         winPath = this.unixToWindowsPath(unixPath);
         if (winPath && this.fs.existsSync(winPath)) {
           return this.fs.statSync(winPath).size;
@@ -298,11 +481,17 @@ class VirtualFileSystem {
     } catch (err) {
       console.warn('VirtualFileSystem getFileSize error:', err);
     }
-    
+
     return null;
   }
 
   unixToWindowsPath(unixPath) {
+    // Try user-specific path first
+    const userPath = this.getUserWindowsPath(unixPath);
+    if (userPath) {
+      return userPath;
+    }
+
     if (!this.root_) return null;
     const clean = this.normalizeUnix(unixPath);
     if (clean === '/') return this.root_;
@@ -329,7 +518,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem mkdir error:', err);
     }
-    
+
     return false;
   }
 
@@ -343,7 +532,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem rmdir error:', err);
     }
-    
+
     return false;
   }
 
@@ -357,7 +546,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem unlink error:', err);
     }
-    
+
     return false;
   }
 
@@ -372,7 +561,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem copyFile error:', err);
     }
-    
+
     return false;
   }
 
@@ -387,7 +576,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem rename error:', err);
     }
-    
+
     return false;
   }
 
@@ -400,7 +589,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem readFile error:', err);
     }
-    
+
     return null;
   }
 
@@ -414,7 +603,7 @@ class VirtualFileSystem {
     } catch (err) {
       console.error('VirtualFileSystem writeFile error:', err);
     }
-    
+
     return false;
   }
 

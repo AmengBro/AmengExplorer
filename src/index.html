@@ -33,12 +33,14 @@
         <button class="nav-sidebar-item" data-location="trash" data-icon="trash" title="回收站"></button>
       </div>
 
-      <div class="nav-sidebar-spacer"></div>
-
-      <div class="nav-sidebar-drives">
+      <div class="nav-sidebar-drives is-hidden">
         <button class="nav-sidebar-drive" data-path="C:\" data-icon="disk" title="本地磁盘 (C:)"></button>
         <button class="nav-sidebar-drive" data-path="D:\" data-icon="disk" title="数据盘 (D:)"></button>
         <button class="nav-sidebar-drive" data-location="network" data-icon="network" title="网络"></button>
+      </div>
+
+      <div class="nav-sidebar-footer">
+        <button class="nav-sidebar-settings-btn" id="settings-btn" data-icon="settings" title="设置"></button>
       </div>
     </nav>
 
@@ -247,7 +249,7 @@
             </div>
           </div>
 
-            <div class="file-browser-status-bar" id="file-browser-status-bar">
+            <div class="file-browser-status-bar is-hidden" id="file-browser-status-bar">
               <div class="status-left">
                 <span class="status-text">0 个项目</span>
               </div>
@@ -345,6 +347,12 @@
           <button class="context-menu-item" id="ctx-delete" data-icon="delete">
             <span>删除</span>
             <span class="context-menu-shortcut">Delete</span>
+          </button>
+          <button class="context-menu-item is-hidden" id="ctx-restore" data-icon="undo">
+            <span>恢复</span>
+          </button>
+          <button class="context-menu-item is-hidden" id="ctx-permanent-delete" data-icon="delete">
+            <span>永久删除</span>
           </button>
         </div>
         <div class="context-menu-separator"></div>
@@ -500,6 +508,351 @@
           <div class="status-center-empty">
             <span data-icon="activity"></span>
             <span>暂无正在进行的任务</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-panel is-hidden" id="filter-panel">
+      <div class="filter-panel-header">
+        <span data-icon="filter"></span>
+        <span class="filter-panel-title">筛选</span>
+        <button class="filter-panel-close" id="filter-panel-close" title="关闭">×</button>
+      </div>
+      <div class="filter-panel-content">
+        <div class="filter-panel-row">
+          <label class="filter-panel-label">面板</label>
+          <select class="filter-panel-select" id="filter-pane-select">
+            <option value="left">左侧面板</option>
+            <option value="right">右侧面板</option>
+          </select>
+        </div>
+        <div class="filter-panel-row">
+          <label class="filter-panel-label">类型</label>
+          <select class="filter-panel-select" id="filter-type-select">
+            <option value="all">所有类型</option>
+            <option value="folder">文件夹</option>
+            <option value="image">图片</option>
+            <option value="video">视频</option>
+            <option value="audio">音频</option>
+            <option value="document">文档</option>
+            <option value="code">代码</option>
+            <option value="archive">压缩包</option>
+            <option value="executable">可执行</option>
+            <option value="font">字体</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+        <div class="filter-panel-row">
+          <label class="filter-panel-label">名称</label>
+          <input type="text" class="filter-panel-input" id="filter-name-input" placeholder="按名称筛选...">
+        </div>
+        <div class="filter-panel-row">
+          <label class="filter-panel-label">日期</label>
+          <select class="filter-panel-select" id="filter-date-select">
+            <option value="all">任意时间</option>
+            <option value="today">今天</option>
+            <option value="7days">最近 7 天</option>
+            <option value="30days">最近 30 天</option>
+            <option value="thismonth">本月</option>
+            <option value="thisyear">今年</option>
+          </select>
+        </div>
+        <div class="filter-panel-footer">
+          <button class="filter-panel-clear" id="filter-clear-btn">清除筛选</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Overlay -->
+    <div class="settings-overlay is-hidden" id="settings-overlay">
+      <div class="settings-container">
+        <div class="settings-header">
+          <div class="settings-title">
+            <span class="settings-title-icon" data-icon="settings"></span>
+            <span class="settings-title-text">设置</span>
+          </div>
+          <button class="settings-close-btn" id="settings-close-btn" title="关闭 (Esc)">×</button>
+        </div>
+        <div class="settings-tabs" id="settings-tabs">
+          <button class="settings-tab active" data-tab="general">通用</button>
+          <button class="settings-tab" data-tab="search">搜索</button>
+          <button class="settings-tab" data-tab="appearance">外观</button>
+          <button class="settings-tab" data-tab="about">关于</button>
+        </div>
+        <div class="settings-content" id="settings-content">
+          <!-- 通用设置 -->
+          <div class="settings-tab-panel active" data-panel="general">
+            <div class="settings-section">
+              <h3 class="settings-section-title">基本设置</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">启动时打开</span>
+                  <span class="setting-desc">应用启动后自动打开的页面</span>
+                </div>
+                <select class="setting-select" id="setting-start-page">
+                  <option value="home">主页</option>
+                  <option value="last">上次打开的目录</option>
+                  <option value="desktop">桌面</option>
+                  <option value="documents">文档</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">默认视图</span>
+                  <span class="setting-desc">文件浏览的默认显示方式</span>
+                </div>
+                <select class="setting-select" id="setting-default-view">
+                  <option value="list">列表视图</option>
+                  <option value="grid">网格视图</option>
+                  <option value="column">分栏视图</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">语言</span>
+                  <span class="setting-desc">界面显示语言</span>
+                </div>
+                <select class="setting-select" id="setting-language">
+                  <option value="zh-CN">简体中文</option>
+                  <option value="en-US">English</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3 class="settings-section-title">文件操作</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">删除前确认</span>
+                  <span class="setting-desc">删除文件或文件夹前显示确认对话框</span>
+                </div>
+                <label class="setting-switch">
+                  <input type="checkbox" id="setting-confirm-delete" checked>
+                  <span class="setting-switch-slider"></span>
+                </label>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">显示隐藏文件</span>
+                  <span class="setting-desc">显示以点号开头的隐藏文件</span>
+                </div>
+                <label class="setting-switch">
+                  <input type="checkbox" id="setting-show-hidden">
+                  <span class="setting-switch-slider"></span>
+                </label>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">双击打开文件</span>
+                  <span class="setting-desc">双击文件时打开，单击时选中</span>
+                </div>
+                <label class="setting-switch">
+                  <input type="checkbox" id="setting-double-click" checked>
+                  <span class="setting-switch-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <!-- 搜索设置 -->
+          <div class="settings-tab-panel" data-panel="search">
+            <div class="settings-section">
+              <h3 class="settings-section-title">Everything 搜索</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Everything 路径</span>
+                  <span class="setting-desc">Everything 安装目录</span>
+                </div>
+                <input type="text" class="setting-input" id="setting-everything-path" placeholder="D:\Everything">
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">启用 Everything</span>
+                  <span class="setting-desc">使用 Everything 进行快速文件搜索</span>
+                </div>
+                <label class="setting-switch">
+                  <input type="checkbox" id="setting-everything-enabled" checked>
+                  <span class="setting-switch-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3 class="settings-section-title">索引设置</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">自动构建索引</span>
+                  <span class="setting-desc">启动时自动在后台构建文件索引</span>
+                </div>
+                <label class="setting-switch">
+                  <input type="checkbox" id="setting-auto-index" checked>
+                  <span class="setting-switch-slider"></span>
+                </label>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">搜索深度</span>
+                  <span class="setting-desc">索引扫描的目录深度</span>
+                </div>
+                <select class="setting-select" id="setting-search-depth">
+                  <option value="3">浅层 (3层)</option>
+                  <option value="5" selected>标准 (5层)</option>
+                  <option value="8">深层 (8层)</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3 class="settings-section-title">历史记录</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">保存搜索历史</span>
+                  <span class="setting-desc">保存最近的搜索和运行记录</span>
+                </div>
+                <label class="setting-switch">
+                  <input type="checkbox" id="setting-save-history" checked>
+                  <span class="setting-switch-slider"></span>
+                </label>
+              </div>
+              <div class="setting-row">
+                <button class="setting-btn-secondary" id="setting-clear-history">清空历史记录</button>
+              </div>
+            </div>
+          </div>
+          <!-- 外观设置 -->
+          <div class="settings-tab-panel" data-panel="appearance">
+            <div class="settings-section">
+              <h3 class="settings-section-title">主题</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">主题模式</span>
+                  <span class="setting-desc">选择应用的显示主题</span>
+                </div>
+                <select class="setting-select" id="setting-theme">
+                  <option value="dark" selected>深色</option>
+                  <option value="light">浅色</option>
+                  <option value="system">跟随系统</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">强调色</span>
+                  <span class="setting-desc">界面的强调色</span>
+                </div>
+                <div class="setting-color-options" id="setting-accent-color">
+                  <button class="setting-color-swatch active" data-color="blue" style="background: hsl(220, 80%, 50%)"></button>
+                  <button class="setting-color-swatch" data-color="purple" style="background: hsl(270, 80%, 50%)"></button>
+                  <button class="setting-color-swatch" data-color="green" style="background: hsl(140, 70%, 45%)"></button>
+                  <button class="setting-color-swatch" data-color="orange" style="background: hsl(30, 90%, 50%)"></button>
+                  <button class="setting-color-swatch" data-color="red" style="background: hsl(0, 80%, 55%)"></button>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3 class="settings-section-title">字体</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">字体大小</span>
+                  <span class="setting-desc">界面文字的显示大小</span>
+                </div>
+                <input type="range" class="setting-range" id="setting-font-size" min="12" max="18" value="14">
+                <span class="setting-range-value" id="setting-font-size-value">14</span>
+              </div>
+            </div>
+          </div>
+          <!-- 关于 -->
+          <div class="settings-tab-panel" data-panel="about">
+            <div class="settings-section">
+              <h3 class="settings-section-title">AmengExplorer</h3>
+              <div class="about-content">
+                <div class="about-logo">
+                  <img src="../explorer.png" alt="AmengExplorer" width="64" height="64">
+                </div>
+                <div class="about-info">
+                  <p class="about-name">AmengExplorer</p>
+                  <p class="about-version">版本 1.0.0</p>
+                  <p class="about-description">在 Windows 上体验 Linux 的文件管理</p>
+                  <p class="about-author">© 2026 A萌菌</p>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3 class="settings-section-title">信息</h3>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">配置文件位置</span>
+                  <span class="setting-desc" id="setting-config-path">-</span>
+                </div>
+                <button class="setting-btn-secondary" id="setting-open-config">打开</button>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">数据存储模式</span>
+                  <span class="setting-desc">便携版（数据存储在应用目录）</span>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3 class="settings-section-title">操作</h3>
+              <div class="setting-row">
+                <button class="setting-btn-primary" id="setting-check-update">检查更新</button>
+              </div>
+              <div class="setting-row">
+                <button class="setting-btn-secondary" id="setting-reset-settings">恢复默认设置</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Launchpad Overlay -->
+    <div class="launchpad-overlay is-hidden" id="launchpad-overlay">
+      <div class="launchpad-container">
+        <div class="launchpad-header">
+          <div class="launchpad-search-wrapper">
+            <span class="launchpad-search-icon" data-icon="search"></span>
+            <input type="text" class="launchpad-input" id="launchpad-input" placeholder="输入文件名、命令或路径... (Ctrl+P)">
+            <div class="launchpad-mode-indicator" id="launchpad-mode-indicator" title="点击切换搜索/运行模式"></div>
+            <button class="launchpad-close-btn" id="launchpad-close-btn" title="关闭 (Esc)">×</button>
+          </div>
+        </div>
+        <div class="launchpad-content" id="launchpad-content">
+          <div class="launchpad-empty" id="launchpad-empty">
+            <div class="launchpad-empty-row">
+              <div class="launchpad-empty-section">
+                <div class="launchpad-section-title">
+                  <span data-icon="clock"></span>
+                  <span>最近搜索</span>
+                  <button class="launchpad-clear-btn" data-clear="searches" title="清空">
+                    <span data-icon="trash"></span>
+                  </button>
+                </div>
+                <div class="launchpad-recent" id="launchpad-recent-searches">
+                  <div class="launchpad-no-history">暂无搜索记录</div>
+                </div>
+              </div>
+              <div class="launchpad-empty-section">
+                <div class="launchpad-section-title">
+                  <span data-icon="bolt"></span>
+                  <span>快速运行</span>
+                  <button class="launchpad-clear-btn" data-clear="runs" title="清空">
+                    <span data-icon="trash"></span>
+                  </button>
+                </div>
+                <div class="launchpad-recent" id="launchpad-recent-runs">
+                  <div class="launchpad-no-history">暂无运行记录</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="launchpad-results is-hidden" id="launchpad-results">
+            <div class="launchpad-results-list" id="launchpad-results-list"></div>
+          </div>
+          <div class="launchpad-footer" id="launchpad-footer">
+            <div class="launchpad-footer-left">
+              <span class="launchpad-hint" id="launchpad-hint"></span>
+            </div>
+            <div class="launchpad-footer-right">
+              <span class="launchpad-count" id="launchpad-count"></span>
+            </div>
           </div>
         </div>
       </div>

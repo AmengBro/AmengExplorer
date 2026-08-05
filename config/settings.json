@@ -1,0 +1,17 @@
+{
+  "startPage": "home",
+  "defaultView": "list",
+  "language": "zh-CN",
+  "confirmDelete": false,
+  "showHidden": true,
+  "doubleClick": true,
+  "everythingPath": "",
+  "amsysPath": "",
+  "everythingEnabled": true,
+  "autoIndex": true,
+  "searchDepth": 5,
+  "saveHistory": true,
+  "theme": "dark",
+  "accentColor": "orange",
+  "fontSize": 13
+}

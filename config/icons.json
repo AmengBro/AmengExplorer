@@ -109,6 +109,10 @@
   "sort": "arrow_sort",
   "sync": "arrow_swap",
   "delete": "delete",
+  "settings": "settings",
+  "undo": "arrow_undo",
+  "bolt": "bolt",
+  "clock": "clock",
 
   "contextMenu": {
     "open": "open",

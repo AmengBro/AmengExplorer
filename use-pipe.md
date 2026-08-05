@@ -32,6 +32,40 @@ console.log(result.winPath); // C:\
 
 ---
 
+## 命令行参数
+
+`amsys.exe` 支持以下启动参数（必须在 spawn 时传入，进程运行期间不可更改）：
+
+| 参数 | 说明 |
+|------|------|
+| `--pipe` | 管道模式：JSON Lines over stdin/stdout（本文档主流程） |
+| `--user <用户名>` | 指定当前用户，默认 `root`。设置会话的 `USER`/`HOME` 环境变量，用于交互式 shell 的用户上下文（提示符、`~` 相关行为等）；pipe 模式的 `resolve` / `list_dir` / `to_windows` 路径映射不受影响，路径始终按 `config.ini` 的 root 解析 |
+| `--sudo` | 以 sudo 权限运行 |
+| `--cwd=<目录>` | 指定工作目录 |
+| `--exec=<命令>` | 启动后直接执行命令 |
+| `--tmpfile=<路径>` | 临时文件模式 |
+
+**`--user` 使用示例**：
+
+```typescript
+const { spawn } = require('child_process');
+const path = require('path');
+
+// 以 AmengBro 身份启动；root 是默认值，可不传
+const amsys = spawn('amsys.exe', ['--pipe', '--user', 'AmengBro'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    // config.ini 里的相对 root（如 ./root）是相对进程工作目录解析的，
+    // 建议显式把 cwd 固定为 amsys.exe 所在目录，避免受启动方目录影响
+    cwd: path.dirname('amsys.exe'),
+});
+```
+
+**切换用户**：`--user` 只能在启动时指定，切换用户需要结束当前进程并用新参数重新 spawn（参考 `amsys-client.js` 的 `setUser()`）。
+
+**配置查找**：`config.ini` 在 amsys.exe 所在目录及其上级目录查找；其中 `[system] root` 若为相对路径（如 `./root`），则相对**进程工作目录**解析——因此打包/部署时必须保证 `cwd` 指向 amsys.exe 所在目录，否则虚拟根会挂载失败。
+
+---
+
 ## 协议格式
 
 ### 请求
@@ -241,8 +275,13 @@ class AmsysClient {
     private queue: Array<{ resolve: (v: any) => void; reject: (e: any) => void }> = [];
     private buffer = '';
 
-    constructor(path: string = 'amsys.exe') {
-        this.proc = spawn(path, ['--pipe'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    constructor(path: string = 'amsys.exe', user?: string) {
+        const args = ['--pipe'];
+        if (user) args.push('--user', user);
+        this.proc = spawn(path, args, {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            cwd: path.dirname(path),
+        });
         this.proc.stdout!.on('data', (data: Buffer) => {
             this.buffer += data.toString();
             const lines = this.buffer.split('\n');

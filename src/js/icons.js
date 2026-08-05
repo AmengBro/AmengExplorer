@@ -1,16 +1,16 @@
 const fs = require('fs');
 const path = require('path');
+const { ipcRenderer } = require('electron');
 
 const iconsDir = path.join(__dirname, '..', '..', 'node_modules', '@fluentui', 'svg-icons', 'icons');
-const configPath = path.join(__dirname, '..', '..', 'config', 'icons.json');
 
 let iconConfig = null;
 
 function loadConfig() {
   if (iconConfig) return iconConfig;
   try {
-    const raw = fs.readFileSync(configPath, 'utf8');
-    iconConfig = JSON.parse(raw);
+    // 使用同步 IPC 读取配置
+    iconConfig = ipcRenderer.sendSync('config-sync-read-icons') || {};
   } catch (err) {
     console.error('Failed to load icons.json config:', err.message);
     iconConfig = {};
@@ -78,10 +78,14 @@ fluentIcons.getIconName = function(key) {
 fluentIcons.setIconName = function(key, iconName) {
   const config = loadConfig();
   config[key] = iconName;
-  delete require.cache[configPath];
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-  iconConfig = config;
-  this[key] = loadIcon(iconName, (config._defaults || {}).size || 24, (config._defaults || {}).style || 'filled');
+  // 使用同步 IPC 写入配置
+  const result = ipcRenderer.sendSync('config-sync-write-icons', config);
+  if (result && result.success) {
+    iconConfig = config;
+    this[key] = loadIcon(iconName, (config._defaults || {}).size || 24, (config._defaults || {}).style || 'filled');
+  } else {
+    console.error('Failed to save icon config:', result?.error);
+  }
 };
 
 module.exports = fluentIcons;

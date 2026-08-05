@@ -20,6 +20,9 @@ class FileManager {
     this.tasks = [];
     this.taskIdCounter = 1;
     this.sizeCache = new Map();
+
+    this.leftPaneFilter = this.createEmptyFilter();
+    this.rightPaneFilter = this.createEmptyFilter();
     
     this.tabIdCounter = 1;
     this.currentTabId = 'tab-1';
@@ -42,17 +45,26 @@ class FileManager {
     try { this.initKeyboardShortcuts(); } catch(e) { console.error('initKeyboardShortcuts failed:', e); }
     try { this.initViewButtons(); } catch(e) { console.error('initViewButtons failed:', e); }
     try { this.initSidebar(); } catch(e) { console.error('initSidebar failed:', e); }
+    try { this.initFilterPanel(); } catch(e) { console.error('initFilterPanel failed:', e); }
+    try { this.initLaunchpad(); } catch(e) { console.error('initLaunchpad failed:', e); }
+    try { this.initSettings(); } catch(e) { console.error('initSettings failed:', e); }
     
     this.hideLoadingScreen();
     
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => {
-        console.log('DOMContentLoaded: calling showHome()');
+    const showHomeWhenReady = () => {
+      // 等待虚拟文件系统初始化（amsys 解析虚拟根 + 加载用户配置）完成再渲染
+      Promise.resolve(this.vfs.ready).then(() => {
+        this.showHome();
+      }).catch((err) => {
+        console.error('vfs init failed:', err);
         this.showHome();
       });
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', showHomeWhenReady);
     } else {
-      console.log('DOM already ready: calling showHome()');
-      this.showHome();
+      showHomeWhenReady();
     }
   }
   
@@ -550,7 +562,10 @@ class FileManager {
     } catch (err) {
       if (err.message === 'cancelled') return;
       console.error('loadDirectory: stat failed for:', dirPath, 'error:', err.message);
-      this.showDialog('错误', `无法访问目录: ${dirPath}`, 'error');
+      this.showDialog('错误', `路径不存在或无法访问: ${dirPath}`, 'error');
+      if (this.addressBarInput) {
+        this.addressBarInput.value = this.currentPath || '/';
+      }
       return;
     }
     
@@ -600,17 +615,27 @@ class FileManager {
         if (!a.isDirectory && b.isDirectory) return 1;
         return a.name.localeCompare(b.name, 'zh-CN');
       });
-      
-      const fileData = await this.renderFileList(sortedFiles);
+
+      const totalCount = sortedFiles.length;
+      this._leftPaneTotalCount = totalCount;
+      const filteredFiles = this.applyFilter(sortedFiles, this.leftPaneFilter);
+
+      const fileData = await this.renderFileList(filteredFiles, 'left', currentToken);
       checkCancelled();
+
+      const visibleCount = filteredFiles.length;
       if (typeof this.updateStatusBar === 'function') {
-        this.updateStatusBar(sortedFiles.length);
+        this.updateStatusBar(this.isFilterActive(this.leftPaneFilter) ? visibleCount : totalCount);
       }
       
       // 更新左侧面板状态条
       const leftStatusText = document.querySelector('#file-pane-left .pane-status-text');
       if (leftStatusText) {
-        leftStatusText.textContent = `${sortedFiles.length} 个项目`;
+        if (this.isFilterActive(this.leftPaneFilter)) {
+          leftStatusText.textContent = `${visibleCount} / ${totalCount} 个项目 (已筛选)`;
+        } else {
+          leftStatusText.textContent = `${totalCount} 个项目`;
+        }
       }
       
       const tab = document.querySelector(`[data-tab-id="${this.currentTabId}"]`);
@@ -635,7 +660,9 @@ class FileManager {
     }
   }
   
-  async renderFileList(files, pane = 'left') {
+  async renderFileList(files, pane = 'left', loadToken = null) {
+    // 使用 token 检查是否已被取消（比 _loadCancelled 更可靠）
+    if (loadToken !== null && this._loadToken !== loadToken) return [];
     if (this._loadCancelled) return [];
     
     const fileListLeft = document.getElementById('file-list-left');
@@ -653,6 +680,8 @@ class FileManager {
     
     const isVirtualDir = await this.vfs.isVirtualPath(this.currentPath);
     
+    // 再次检查 token 和取消状态
+    if (loadToken !== null && this._loadToken !== loadToken) return [];
     if (this._loadCancelled) return [];
     
     const filePromises = files.map(async file => {
@@ -660,24 +689,45 @@ class FileManager {
       const isVirtual = file.is_virtual === true || await this.vfs.isVirtualPath(fullPath);
       let size = file.size;
       let isDir = file.isDirectory;
+      let isSymlink = false;
       
-      if (!isVirtual && !isDir) {
-        try {
-          const realStats = await this.vfs.stat(fullPath);
-          if (realStats && realStats.isDirectory && realStats.isDirectory()) {
-            isDir = true;
-          }
-        } catch (e) {
-        }
-      }
-      
-      if (!isVirtual && !isDir) {
+      if (!isVirtual) {
         try {
           const winPath = this.vfs.unixToWindowsPath(fullPath);
           if (winPath) {
-            const fs = require('fs').promises;
-            const stat = await fs.stat(winPath);
-            size = stat.size;
+            const fsMod = require('fs');
+            try {
+              // 先用 lstat 检查是否为符号链接
+              const lstat = fsMod.lstatSync(winPath);
+              if (lstat.isSymbolicLink()) {
+                isSymlink = true;
+                // 符号链接指向的目标是否为目录
+                const stat = fsMod.statSync(winPath);
+                isDir = stat.isDirectory();
+                size = stat.size;
+              } else {
+                // 不是符号链接，按原逻辑处理
+                if (!isDir) {
+                  if (lstat.isDirectory()) {
+                    isDir = true;
+                  }
+                }
+                if (!isDir) {
+                  size = lstat.size;
+                }
+              }
+            } catch (e) {
+              // lstat 失败时用原逻辑
+              if (!isDir) {
+                try {
+                  const realStats = await this.vfs.stat(fullPath);
+                  if (realStats && realStats.isDirectory && realStats.isDirectory()) {
+                    isDir = true;
+                  }
+                } catch (e2) {
+                }
+              }
+            }
           }
         } catch (e) {
         }
@@ -688,15 +738,27 @@ class FileManager {
         isFile: () => !isDir,
         size: size,
         mtime: new Date(file.mtime || Date.now()),
-        isVirtual: isVirtual
+        isVirtual: isVirtual,
+        isSymbolicLink: isSymlink
       };
       
-      return { file: { ...file, isDirectory: isDir }, fullPath, stats };
+      return { file: { ...file, isDirectory: isDir, isSymlink: isSymlink }, fullPath, stats };
     });
     
     const fileData = await Promise.all(filePromises);
     
+    // 在追加文件前检查 token 和取消状态
+    if (loadToken !== null && this._loadToken !== loadToken) return [];
     if (this._loadCancelled) return [];
+    
+    // 在追加文件前再次清空容器，防止并发写入
+    if (pane === 'left') {
+      if (fileListLeft) fileListLeft.innerHTML = '';
+      if (gridContainerLeft) gridContainerLeft.innerHTML = '';
+    } else if (pane === 'right') {
+      if (fileListRight) fileListRight.innerHTML = '';
+      if (gridContainerRight) gridContainerRight.innerHTML = '';
+    }
     
     fileData.forEach(({ file, fullPath, stats }) => {
       if (pane === 'left') {
@@ -741,8 +803,15 @@ class FileManager {
     div.className = 'file-item';
     div.dataset.path = fullPath;
     div.dataset.name = file.name;
+    div.dataset.mtime = file.mtime || '';
     
-    let iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    const isSymlink = stats.isSymbolicLink === true;
+    let iconType;
+    if (isSymlink) {
+      iconType = file.isDirectory ? 'folder-symlink' : 'file-symlink';
+    } else {
+      iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    }
     let iconSvg = this.getFileIcon(file, fullPath);
     
     const isDir = file.isDirectory;
@@ -752,8 +821,8 @@ class FileManager {
     let sizeDisplay;
     if (isVirtual) {
       sizeDisplay = '无';
-    } else if (isDir) {
-      // 检查缓存中是否已有计算结果
+    } else if (isDir && !isSymlink) {
+      // 检查缓存中是否已有计算结果（非符号链接的目录才计算大小）
       const cached = this.sizeCache.get(fullPath);
       if (cached) {
         if (cached.status === 'virtual') {
@@ -765,12 +834,15 @@ class FileManager {
         // 初始显示"查看"，autoCalcSubfolderSizes 会异步更新为大小
         sizeDisplay = '<button class="file-item-size-btn" data-path="' + fullPath + '">查看</button>';
       }
+    } else if (isDir && isSymlink) {
+      // 符号链接指向目录
+      sizeDisplay = '<span class="size-link">→ 链接</span>';
     } else {
       sizeDisplay = fileSize > 0 ? this.formatFileSize(fileSize) : '无';
     }
     
     const date = stats.mtime.toLocaleString('zh-CN');
-    const type = this.getFileType(file.name);
+    const type = this.getFileType(file.name, isDir, isSymlink);
     
     div.innerHTML = `
       <div class="file-item-icon ${iconType}">${iconSvg}</div>
@@ -874,15 +946,24 @@ class FileManager {
     div.className = 'grid-item';
     div.dataset.path = fullPath;
     div.dataset.name = file.name;
+    div.dataset.mtime = file.mtime || '';
     
-    let iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    const isSymlink = stats.isSymbolicLink === true;
+    let iconType;
+    if (isSymlink) {
+      iconType = file.isDirectory ? 'folder-symlink' : 'file-symlink';
+    } else {
+      iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    }
     let iconSvg = this.getFileIcon(file, fullPath);
     
     const isDir = file.isDirectory;
     const fileSize = stats.size;
     
     let sizeDisplay = '';
-    if (!isDir) {
+    if (isSymlink) {
+      sizeDisplay = isDir ? '<span class="size-link">→ 链接</span>' : this.formatFileSize(fileSize);
+    } else if (!isDir) {
       sizeDisplay = this.formatFileSize(fileSize);
     }
     
@@ -900,8 +981,15 @@ class FileManager {
     div.className = 'column-item';
     div.dataset.path = fullPath;
     div.dataset.name = file.name;
+    div.dataset.mtime = file.mtime || '';
     
-    let iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    const isSymlink = stats.isSymbolicLink === true;
+    let iconType;
+    if (isSymlink) {
+      iconType = file.isDirectory ? 'folder-symlink' : 'file-symlink';
+    } else {
+      iconType = file.isDirectory ? 'folder' : (fullPath.startsWith('/dev/') ? 'device' : 'file');
+    }
     let iconSvg = this.getFileIcon(file, fullPath);
     
     const isDir = file.isDirectory;
@@ -911,7 +999,7 @@ class FileManager {
     let sizeDisplay;
     if (isVirtual) {
       sizeDisplay = '无';
-    } else if (isDir) {
+    } else if (isDir && !isSymlink) {
       const cached = this.sizeCache.get(fullPath);
       if (cached) {
         if (cached.status === 'virtual') {
@@ -922,12 +1010,14 @@ class FileManager {
       } else {
         sizeDisplay = '<button class="column-item-size-btn" data-path="' + fullPath + '">...</button>';
       }
+    } else if (isDir && isSymlink) {
+      sizeDisplay = '<span class="size-link">→ 链接</span>';
     } else {
       sizeDisplay = fileSize > 0 ? this.formatFileSize(fileSize) : '无';
     }
     
     const date = stats.mtime.toLocaleString('zh-CN');
-    const type = this.getFileType(file.name);
+    const type = this.getFileType(file.name, isDir, isSymlink);
     
     div.innerHTML = `
       <div class="column-item-cell name-cell">
@@ -978,7 +1068,7 @@ class FileManager {
     if (file.isDirectory) {
       return this.icons.folder;
     }
-    if (fullPath.startsWith('/dev/')) {
+    if (fullPath && typeof fullPath === 'string' && fullPath.startsWith('/dev/')) {
       return this.icons.device;
     }
 
@@ -1529,7 +1619,233 @@ class FileManager {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
   
-  getFileType(name) {
+  createEmptyFilter() {
+    return {
+      type: 'all',
+      namePattern: '',
+      dateRange: 'all',
+      customTypes: []
+    };
+  }
+
+  getTypeCategories() {
+    return [
+      { key: 'all', label: '所有类型' },
+      { key: 'folder', label: '文件夹' },
+      { key: 'image', label: '图片', exts: ['png','jpg','jpeg','gif','bmp','webp','tiff','tif','heic','raw','ico','svg','svgz'] },
+      { key: 'video', label: '视频', exts: ['mp4','mkv','avi','mov','wmv','flv','webm','m4v','3gp'] },
+      { key: 'audio', label: '音频', exts: ['mp3','wav','flac','aac','ogg','wma','m4a','opus','ape'] },
+      { key: 'document', label: '文档', exts: ['pdf','doc','docx','docm','dotx','dotm','xls','xlsx','xlsm','xltx','xltm','xlsb','ppt','pptx','pptm','potx','potm','txt','log','text','rtf','md','markdown','mdx','csv','tsv'] },
+      { key: 'code', label: '代码', exts: ['js','mjs','cjs','ts','tsx','mts','cts','css','scss','sass','less','styl','html','htm','xhtml','vue','svelte','py','pyw','pyx','ipynb','json','xml','xsl','xslt','wsdl','cpp','cxx','cc','hpp','hxx','hh','c','h','java','jsp','jspx','cs','csproj','go','mod','rs','php','phtml','sql','sqlite','db','mdb','accdb','sh','bash','zsh','fish','ksh','rb','rake','swift','kt','scala','dart','yml','yaml','toml','ini','cfg','conf','config'] },
+      { key: 'archive', label: '压缩包', exts: ['zip','rar','7z','tar','gz','bz2','xz','zst','tgz','tbz2'] },
+      { key: 'executable', label: '可执行', exts: ['exe','msi','com','bat','cmd','ps1','psm1'] },
+      { key: 'font', label: '字体', exts: ['ttf','otf','woff','woff2','eot'] },
+      { key: 'other', label: '其他' }
+    ];
+  }
+
+  getTypeCategory(file) {
+    if (file.isDirectory) return 'folder';
+    const name = file.name || '';
+    const lastDot = name.lastIndexOf('.');
+    const ext = lastDot > 0 && lastDot < name.length - 1 ? name.substring(lastDot + 1).toLowerCase() : '';
+    const categories = this.getTypeCategories();
+    for (const cat of categories) {
+      if (cat.exts && cat.exts.includes(ext)) return cat.key;
+    }
+    return 'other';
+  }
+
+  applyFilter(files, filter) {
+    if (!filter) return files;
+    let result = files;
+
+    if (filter.type && filter.type !== 'all') {
+      result = result.filter(f => {
+        const cat = this.getTypeCategory(f);
+        if (filter.type === 'folder') return cat === 'folder';
+        if (filter.type === 'other') return cat === 'other';
+        return cat === filter.type;
+      });
+    }
+
+    if (filter.namePattern) {
+      const pattern = filter.namePattern.toLowerCase();
+      result = result.filter(f => f.name.toLowerCase().includes(pattern));
+    }
+
+    if (filter.dateRange && filter.dateRange !== 'all') {
+      const now = Date.now();
+      const dayMs = 86400000;
+      result = result.filter(f => {
+        if (!f.mtime) return true;
+        const mtime = new Date(f.mtime).getTime();
+        switch (filter.dateRange) {
+          case 'today': return mtime >= now - dayMs;
+          case '7days': return mtime >= now - 7 * dayMs;
+          case '30days': return mtime >= now - 30 * dayMs;
+          case 'thismonth': {
+            const d = new Date();
+            const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+            return mtime >= start;
+          }
+          case 'thisyear': {
+            const d = new Date();
+            return mtime >= new Date(d.getFullYear(), 0, 1).getTime();
+          }
+          default: return true;
+        }
+      });
+    }
+
+    return result;
+  }
+
+  isFilterActive(filter) {
+    if (!filter) return false;
+    if (filter.type && filter.type !== 'all') return true;
+    if (filter.namePattern && filter.namePattern.trim()) return true;
+    if (filter.dateRange && filter.dateRange !== 'all') return true;
+    return false;
+  }
+
+  initFilterPanel() {
+    const filterBtn = document.getElementById('browser-filter-btn');
+    const filterPanel = document.getElementById('filter-panel');
+    if (!filterBtn || !filterPanel) return;
+
+    const rightPane = document.getElementById('file-pane-right');
+    const paneSelect = document.getElementById('filter-pane-select');
+    const typeSelect = document.getElementById('filter-type-select');
+    const nameInput = document.getElementById('filter-name-input');
+    const dateSelect = document.getElementById('filter-date-select');
+    const clearBtn = document.getElementById('filter-clear-btn');
+    const closeBtn = document.getElementById('filter-panel-close');
+
+    // 更新面板中当前激活的筛选状态
+    const updatePanelState = () => {
+      const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+      const pane = isSplitView ? this.activePane : 'left';
+      const filter = pane === 'left' ? this.leftPaneFilter : this.rightPaneFilter;
+      
+      if (paneSelect) {
+        paneSelect.disabled = !isSplitView;
+        paneSelect.value = pane;
+      }
+      if (typeSelect) typeSelect.value = filter.type || 'all';
+      if (nameInput) nameInput.value = filter.namePattern || '';
+      if (dateSelect) dateSelect.value = filter.dateRange || 'all';
+      
+      filterBtn.classList.toggle('active', this.isFilterActive(this.leftPaneFilter) || this.isFilterActive(this.rightPaneFilter));
+    };
+
+    // 根据面板当前筛选状态重新加载
+    const applyFilter = () => {
+      const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+      const pane = isSplitView ? this.activePane : 'left';
+      if (pane === 'left') {
+        this.loadDirectory(this.currentPath, false);
+      } else {
+        this.loadRightPanel(this.currentPath, false);
+      }
+    };
+
+    // 切换面板显示
+    filterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      filterPanel.classList.toggle('is-hidden');
+      if (!filterPanel.classList.contains('is-hidden')) {
+        updatePanelState();
+      }
+    });
+
+    // 关闭按钮
+    if (closeBtn) {
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        filterPanel.classList.add('is-hidden');
+      });
+    }
+
+    // 点击面板外部关闭
+    document.addEventListener('click', (e) => {
+      if (!filterPanel.classList.contains('is-hidden')) {
+        if (!filterPanel.contains(e.target) && !filterBtn.contains(e.target)) {
+          filterPanel.classList.add('is-hidden');
+        }
+      }
+    });
+
+    // ESC 关闭
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !filterPanel.classList.contains('is-hidden')) {
+        filterPanel.classList.add('is-hidden');
+      }
+    });
+
+    // 面板切换
+    if (paneSelect) {
+      paneSelect.addEventListener('change', (e) => {
+        this.activePane = e.target.value;
+        updatePanelState();
+      });
+    }
+
+    // 类型筛选
+    if (typeSelect) {
+      typeSelect.addEventListener('change', (e) => {
+        const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+        const pane = isSplitView ? this.activePane : 'left';
+        const filter = pane === 'left' ? this.leftPaneFilter : this.rightPaneFilter;
+        filter.type = e.target.value;
+        applyFilter();
+      });
+    }
+
+    // 名称筛选（防抖）
+    if (nameInput) {
+      let debounceTimer;
+      nameInput.addEventListener('input', (e) => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+          const pane = isSplitView ? this.activePane : 'left';
+          const filter = pane === 'left' ? this.leftPaneFilter : this.rightPaneFilter;
+          filter.namePattern = e.target.value;
+          applyFilter();
+        }, 250);
+      });
+    }
+
+    // 日期筛选
+    if (dateSelect) {
+      dateSelect.addEventListener('change', (e) => {
+        const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+        const pane = isSplitView ? this.activePane : 'left';
+        const filter = pane === 'left' ? this.leftPaneFilter : this.rightPaneFilter;
+        filter.dateRange = e.target.value;
+        applyFilter();
+      });
+    }
+
+    // 清除筛选
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+        const pane = isSplitView ? this.activePane : 'left';
+        const filter = pane === 'left' ? this.leftPaneFilter : this.rightPaneFilter;
+        Object.assign(filter, this.createEmptyFilter());
+        updatePanelState();
+        applyFilter();
+      });
+    }
+  }
+
+  getFileType(name, isDir = false, isSymlink = false) {
+    if (isSymlink) {
+      return isDir ? '符号链接 (目录)' : '符号链接';
+    }
+    if (isDir) return '文件夹';
     const dotIndex = name.lastIndexOf('.');
     const ext = dotIndex !== -1 ? name.substr(dotIndex).toLowerCase() : '';
     const types = {
@@ -1559,22 +1875,24 @@ class FileManager {
       '.dll': '动态链接库',
       '.bat': '批处理文件',
       '.cmd': '命令文件',
+      '.lnk': '快捷方式',
+      '.url': 'URL快捷方式',
     };
     return types[ext] || '文件';
   }
   
   handleFileClick(item, e) {
     if (e.ctrlKey || e.metaKey) {
-      if (item.dataset.selected === 'true') {
-        delete item.dataset.selected;
+      if (item.classList.contains('selected')) {
+        item.classList.remove('selected');
         this.selectedItems = this.selectedItems.filter(p => p !== item.dataset.path);
       } else {
-        item.dataset.selected = 'true';
+        item.classList.add('selected');
         this.selectedItems.push(item.dataset.path);
       }
     } else {
       this.deselectAll();
-      item.dataset.selected = 'true';
+      item.classList.add('selected');
       this.selectedItems = [item.dataset.path];
     }
     
@@ -1662,6 +1980,39 @@ class FileManager {
   showHome() {
     console.log('showHome() called');
     
+    // 如果在分栏视图中，先关闭分栏
+    const rightPane = document.getElementById('file-pane-right');
+    const divider = document.getElementById('pane-divider');
+    const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+    
+    if (isSplitView) {
+      // 保存右侧面板路径信息用于后续恢复
+      this.savedRightPanePath = this.currentRightPanePath || this.currentPath;
+      // 关闭分栏视图
+      rightPane.classList.add('is-hidden');
+      if (divider) divider.classList.add('is-hidden');
+      const columnBtn = document.getElementById('view-column-btn');
+      columnBtn?.classList.remove('active');
+      
+      // 恢复顶栏显示
+      const navControls = document.getElementById('toolbar-nav-controls');
+      const addressBar = document.getElementById('file-browser-address-bar');
+      const topListViewBtn = document.getElementById('view-list-btn');
+      const topGridViewBtn = document.getElementById('view-grid-btn');
+      const syncControls = document.getElementById('toolbar-sync-controls');
+      if (navControls) navControls.classList.remove('is-hidden');
+      if (addressBar) addressBar.classList.remove('is-hidden');
+      if (topListViewBtn) topListViewBtn.classList.remove('is-hidden');
+      if (topGridViewBtn) topGridViewBtn.classList.remove('is-hidden');
+      if (syncControls) syncControls.classList.add('is-hidden');
+      
+      // 隐藏子控件 header
+      const leftPaneHeader = document.querySelector('#file-pane-left .pane-header');
+      const rightPaneHeader = document.querySelector('#file-pane-right .pane-header');
+      if (leftPaneHeader) leftPaneHeader.classList.add('is-hidden');
+      if (rightPaneHeader) rightPaneHeader.classList.add('is-hidden');
+    }
+    
     this.currentPath = 'computer://mainmenu';
     
     const tabState = this.tabs[this.currentTabId];
@@ -1677,6 +2028,9 @@ class FileManager {
     const fileBrowserToolbar = document.querySelector('.file-browser-toolbar');
     const fileBrowserStatusBar = document.getElementById('file-browser-status-bar');
     const navigatorToolbar = document.querySelector('.navigator-toolbar-actions');
+    const globalStatusBar = document.getElementById('file-browser-status-bar');
+    const leftPaneStatusBar = document.querySelector('#file-pane-left .pane-status-bar');
+    const rightPaneStatusBar = document.querySelector('#file-pane-right .pane-status-bar');
     
     console.log('showHome: homePage element:', homePage);
     
@@ -1686,6 +2040,11 @@ class FileManager {
     if (fileBrowserToolbar) fileBrowserToolbar.classList.remove('is-hidden');
     if (fileBrowserStatusBar) fileBrowserStatusBar.classList.add('is-hidden');
     if (navigatorToolbar) navigatorToolbar.classList.add('is-hidden');
+    
+    // 单面板视图：显示全局底栏，隐藏面板底栏
+    if (globalStatusBar) globalStatusBar.classList.remove('is-hidden');
+    if (leftPaneStatusBar) leftPaneStatusBar.classList.add('is-hidden');
+    if (rightPaneStatusBar) rightPaneStatusBar.classList.add('is-hidden');
     
     const tab = document.querySelector(`[data-tab-id="${this.currentTabId}"]`);
     if (tab) {
@@ -1744,15 +2103,17 @@ class FileManager {
     const grid = document.getElementById('user-directories-grid');
     if (!grid) return;
     
-    const homeDir = this.os.homedir();
+    const userPaths = this.vfs.getUserPaths();
+    
     const directories = [
-      { name: '首页', path: '/home', icon: 'home' },
-      { name: '桌面', path: this.vfs.toUnix(homeDir + '\\Desktop'), icon: 'desktop' },
-      { name: '下载', path: this.vfs.toUnix(homeDir + '\\Downloads'), icon: 'download' },
-      { name: '文件', path: this.vfs.toUnix(homeDir + '\\Documents'), icon: 'folder' },
-      { name: '图片', path: this.vfs.toUnix(homeDir + '\\Pictures'), icon: 'image' },
-      { name: '视频', path: this.vfs.toUnix(homeDir + '\\Videos'), icon: 'video' },
-      { name: '音乐', path: this.vfs.toUnix(homeDir + '\\Music'), icon: 'music' },
+      { name: '首页', path: userPaths.home, icon: 'home' },
+      { name: '桌面', path: userPaths.desktop, icon: 'desktop' },
+      { name: '下载', path: userPaths.downloads, icon: 'download' },
+      { name: '文件', path: userPaths.documents, icon: 'folder' },
+      { name: '图片', path: userPaths.pictures, icon: 'image' },
+      { name: '视频', path: userPaths.videos, icon: 'video' },
+      { name: '音乐', path: userPaths.music, icon: 'music' },
+      { name: '回收站', path: userPaths.recycleBin, icon: 'trash' },
     ];
     
     grid.innerHTML = directories.map(dir => `
@@ -1774,6 +2135,45 @@ class FileManager {
       });
     });
   }
+
+  getUserPermissionText() {
+    if (!this.vfs.userConfig) return '';
+    const perm = this.vfs.userConfig.getCurrentUserPermission();
+    const permMap = {
+      'root': 'root',
+      'sudo': '管理员',
+      'user': '普通用户'
+    };
+    return permMap[perm] || 'user';
+  }
+
+  switchUser(username) {
+    if (!username || username === this.vfs.getCurrentUser()) return;
+    
+    console.log('App: switching to user', username);
+    this.vfs.switchUser(username);
+    this.renderUserDirectories();
+  }
+
+  showUserSwitcher() {
+    if (!this.vfs.userConfig) {
+      alert('系统初始化中，请稍候再试');
+      return;
+    }
+    const users = this.vfs.userConfig.listUsers();
+    const currentUser = this.vfs.getCurrentUser();
+    
+    // Create a simple user switcher prompt
+    const choice = prompt('切换用户:\n' + users.map(u => 
+      u === currentUser ? `${u} (当前)` : u
+    ).join('\n') + '\n\n输入要切换的用户名:');
+    
+    if (choice && users.includes(choice)) {
+      this.switchUser(choice);
+    } else if (choice) {
+      alert('用户 "' + choice + '" 不存在');
+    }
+  }
   
   getDirectoryIcon(iconName) {
     const icons = {
@@ -1784,6 +2184,7 @@ class FileManager {
       image: this.icons.image,
       video: this.icons.video,
       music: this.icons.music,
+      trash: this.icons.trash,
     };
     return icons[iconName] || icons.folder;
   }
@@ -2029,9 +2430,23 @@ class FileManager {
       const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
       if (isDir) {
         this.loadDirectory(path);
+      } else if (stats && stats.isFile && stats.isFile()) {
+        this.openFileInSystem(path);
+        if (this.addressBarInput) {
+          this.addressBarInput.value = this.currentPath;
+        }
+      } else {
+        this.showDialog('错误', `路径不是有效的目录: ${path}`, 'error');
+        if (this.addressBarInput) {
+          this.addressBarInput.value = this.currentPath;
+        }
       }
     } catch (err) {
+      console.warn('navigateTo failed:', path, err.message);
       this.showDialog('错误', `路径不存在: ${path}`, 'error');
+      if (this.addressBarInput) {
+        this.addressBarInput.value = this.currentPath;
+      }
     }
   }
   
@@ -2274,8 +2689,40 @@ class FileManager {
     
     document.getElementById('ctx-delete').addEventListener('click', () => {
       if (this.selectedItems.length > 0) {
-        this.showDialog('确认删除', `确定要删除 ${this.selectedItems.length} 个项目吗？`, 'confirm', () => {
-          this.deleteItems();
+        const trashPath = this.vfs.getTrashPath();
+        const isInTrash = this.currentPath === trashPath.unix;
+        
+        if (isInTrash) {
+          this.showDialog('永久删除', `确定要永久删除 ${this.selectedItems.length} 个项目吗？此操作不可恢复！`, 'confirm', () => {
+            this.permanentlyDeleteItems();
+          });
+        } else {
+          this.showDialog('移到回收站', `确定要将 ${this.selectedItems.length} 个项目移到回收站吗？`, 'confirm', () => {
+            this.deleteItems();
+          });
+        }
+      }
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-restore').addEventListener('click', async () => {
+      if (this.selectedItems.length > 0) {
+        const trashPath = this.vfs.getTrashPath();
+        const destPath = this.getParentPath(trashPath.unix);
+        
+        for (const itemPath of this.selectedItems) {
+          const itemName = itemPath.split('/').pop();
+          const destItemPath = this.joinPath(destPath, itemName);
+          await this.restoreFromTrash(itemPath, destItemPath);
+        }
+      }
+      this.hideContextMenu();
+    });
+    
+    document.getElementById('ctx-permanent-delete').addEventListener('click', () => {
+      if (this.selectedItems.length > 0) {
+        this.showDialog('永久删除', `确定要永久删除 ${this.selectedItems.length} 个项目吗？此操作不可恢复！`, 'confirm', () => {
+          this.permanentlyDeleteItems();
         });
       }
       this.hideContextMenu();
@@ -2405,6 +2852,26 @@ class FileManager {
     const pasteBtn = document.getElementById('ctx-paste');
     if (pasteBtn) {
       pasteBtn.disabled = this.copyBuffer.length === 0;
+    }
+    
+    const trashPath = this.vfs.getTrashPath();
+    const isInTrash = this.currentPath === trashPath.unix;
+    
+    // Show different options for trash vs normal directories
+    const deleteBtn = document.getElementById('ctx-delete');
+    const restoreBtn = document.getElementById('ctx-restore');
+    const permanentDeleteBtn = document.getElementById('ctx-permanent-delete');
+    
+    if (isInTrash) {
+      // In trash: show restore and permanent delete, hide normal delete
+      if (deleteBtn) deleteBtn.classList.add('is-hidden');
+      if (restoreBtn) restoreBtn.classList.remove('is-hidden');
+      if (permanentDeleteBtn) permanentDeleteBtn.classList.remove('is-hidden');
+    } else {
+      // Normal: show delete (move to trash), hide restore and permanent
+      if (deleteBtn) deleteBtn.classList.remove('is-hidden');
+      if (restoreBtn) restoreBtn.classList.add('is-hidden');
+      if (permanentDeleteBtn) permanentDeleteBtn.classList.add('is-hidden');
     }
     
     const openInNewTabBtn = document.getElementById('ctx-open-in-new-tab');
@@ -2787,22 +3254,37 @@ class FileManager {
   
   async deleteItems() {
     const fs = require('fs');
+    const trashPath = this.vfs.getTrashPath();
     
     for (const path of this.selectedItems) {
       try {
         const stats = await this.vfs.stat(path);
         const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
-        if (isDir) {
-          await this.deleteRecursive(path);
-        } else {
-          const winPath = await this.vfs.toWindows(path);
-          if (winPath) {
-            fs.unlinkSync(winPath);
-          }
+        const winPath = await this.vfs.toWindows(path);
+        
+        if (!winPath) continue;
+        
+        // Generate unique name in trash to avoid conflicts
+        let destWin = this.joinPath(trashPath.win, path.split('/').pop());
+        let destUnix = this.joinPath(trashPath.unix, path.split('/').pop());
+        let counter = 1;
+        
+        while (fs.existsSync(destWin)) {
+          const name = path.split('/').pop();
+          const ext = name.includes('.') ? '.' + name.split('.').pop() : '';
+          const baseName = ext ? name.slice(0, -ext.length) : name;
+          destWin = this.joinPath(trashPath.win, `${baseName} (${counter})${ext}`);
+          destUnix = this.joinPath(trashPath.unix, `${baseName} (${counter})${ext}`);
+          counter++;
         }
+        
+        // Move to trash
+        fs.renameSync(winPath, destWin);
+        console.log(`Moved to trash: ${winPath} -> ${destWin}`);
+        
       } catch (err) {
-        console.error('Failed to delete:', err);
-        this.showDialog('错误', `删除失败: ${err.message}`, 'error');
+        console.error('Failed to move to trash:', err);
+        this.showDialog('错误', `移动到回收站失败: ${err.message}`, 'error');
       }
     }
     
@@ -2810,27 +3292,47 @@ class FileManager {
     this.refresh();
   }
   
-  async deleteRecursive(path) {
+  async restoreFromTrash(trashItemPath, destPath) {
     const fs = require('fs');
-    const stats = await this.vfs.stat(path);
-    const isDir = stats && stats.isDirectory ? stats.isDirectory() : false;
     
-    if (isDir) {
-      const fileNames = await this.vfs.readdir(path);
-      for (const file of fileNames) {
-        const filePath = this.joinPath(path, file);
-        await this.deleteRecursive(filePath);
-      }
-      const winPath = await this.vfs.toWindows(path);
-      if (winPath) {
-        fs.rmdirSync(winPath);
-      }
-    } else {
-      const winPath = await this.vfs.toWindows(path);
-      if (winPath) {
-        fs.unlinkSync(winPath);
+    try {
+      const srcWin = await this.vfs.toWindows(trashItemPath);
+      const destWin = await this.vfs.toWindows(destPath);
+      
+      if (!srcWin || !destWin) throw new Error('无法解析路径');
+      
+      fs.renameSync(srcWin, destWin);
+      console.log(`Restored: ${srcWin} -> ${destWin}`);
+      this.refresh();
+      return true;
+    } catch (err) {
+      console.error('Failed to restore from trash:', err);
+      this.showDialog('错误', `恢复失败: ${err.message}`, 'error');
+      return false;
+    }
+  }
+  
+  async permanentlyDeleteItems() {
+    const fs = require('fs');
+    
+    for (const path of this.selectedItems) {
+      try {
+        const winPath = await this.vfs.toWindows(path);
+        if (!winPath) continue;
+        
+        const stats = fs.statSync(winPath);
+        if (stats.isDirectory()) {
+          fs.rmSync(winPath, { recursive: true, force: true });
+        } else {
+          fs.unlinkSync(winPath);
+        }
+      } catch (err) {
+        console.error('Failed to permanently delete:', err);
       }
     }
+    
+    this.selectedItems = [];
+    this.refresh();
   }
   
   initCommandPalette() {
@@ -3606,6 +4108,21 @@ class FileManager {
         if (rightPaneStatusBar) rightPaneStatusBar.classList.add('is-hidden');
       }
     }
+
+    // 更新筛选面板状态（如果已打开）
+    const filterPanel = document.getElementById('filter-panel');
+    if (filterPanel && !filterPanel.classList.contains('is-hidden')) {
+      const filterBtn = document.getElementById('browser-filter-btn');
+      const isSplitView = rightPane && !rightPane.classList.contains('is-hidden');
+      const paneSelect = document.getElementById('filter-pane-select');
+      if (paneSelect) {
+        paneSelect.disabled = !isSplitView;
+        if (!isSplitView) paneSelect.value = 'left';
+      }
+      if (filterBtn) {
+        filterBtn.classList.toggle('active', this.isFilterActive(this.leftPaneFilter) || this.isFilterActive(this.rightPaneFilter));
+      }
+    }
   }
   
   updatePaneViewControls() {
@@ -3635,6 +4152,23 @@ class FileManager {
     const rightStatusText = document.querySelector('#file-pane-right .pane-status-text');
     const rightAddressInput = document.getElementById('pane-right-address');
     
+    // 记录右侧面板当前路径
+    this.currentRightPanePath = path;
+    
+    // 防并发：如果正在加载右侧面板，取消之前的操作
+    if (this._rightLoadToken !== undefined) {
+      this._rightLoadCancelled = true;
+    }
+    const currentRightToken = Date.now();
+    this._rightLoadToken = currentRightToken;
+    this._rightLoadCancelled = false;
+    
+    const checkRightCancelled = () => {
+      if (this._rightLoadCancelled || this._rightLoadToken !== currentRightToken) {
+        throw new Error('cancelled');
+      }
+    };
+    
     if (rightAddressInput) {
       rightAddressInput.value = path;
     }
@@ -3660,31 +4194,83 @@ class FileManager {
       if (rightGridView) rightGridView.classList.remove('is-hidden');
     }
     
-    this.vfs.readdir(path).then(entries => {
-      const files = entries.map(entry => ({
-        name: entry.name,
-        isDirectory: path !== '/dev' && !path.startsWith('/dev/') && entry.type === 'dir',
-        size: entry.size || 0,
-        mtime: entry.mtime || ''
-      })).filter(f => f.name);
+    this.vfs.readdir(path).then(async entries => {
+      checkRightCancelled();
       
-      const sortedFiles = files.sort((a, b) => {
+      const fsMod = require('fs');
+      
+      const files = await Promise.all(entries.map(async entry => {
+        const fullPath = this.joinPath(path, entry.name);
+        const isVirtual = path === '/dev' || path.startsWith('/dev/') || entry.is_virtual === true;
+        let isDir = path !== '/dev' && !path.startsWith('/dev/') && entry.type === 'dir';
+        let isSymlink = false;
+        let size = entry.size || 0;
+        
+        if (!isVirtual) {
+          try {
+            const winPath = this.vfs.unixToWindowsPath(fullPath);
+            if (winPath) {
+              try {
+                const lstat = fsMod.lstatSync(winPath);
+                if (lstat.isSymbolicLink()) {
+                  isSymlink = true;
+                  const stat = fsMod.statSync(winPath);
+                  isDir = stat.isDirectory();
+                  size = stat.size;
+                } else {
+                  if (!isDir && lstat.isDirectory()) {
+                    isDir = true;
+                  }
+                  if (!isDir) {
+                    size = lstat.size;
+                  }
+                }
+              } catch (e) {
+                // lstat 失败时用原逻辑
+              }
+            }
+          } catch (e) {
+          }
+        }
+        
+        return {
+          name: entry.name,
+          isDirectory: isDir,
+          isSymlink: isSymlink,
+          size: size,
+          mtime: entry.mtime || ''
+        };
+      }));
+      
+      const filtered = files.filter(f => f.name);
+      
+      const sortedFiles = filtered.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
         return a.name.localeCompare(b.name, 'zh-CN');
       });
+
+      const totalCount = sortedFiles.length;
+      this._rightPaneTotalCount = totalCount;
+      const filteredFiles = this.applyFilter(sortedFiles, this.rightPaneFilter);
       
-      const fileData = sortedFiles.map(file => {
+      const fileData = filteredFiles.map(file => {
         const fullPath = this.joinPath(path, file.name);
         const stats = {
           isDirectory: () => file.isDirectory,
           isFile: () => !file.isDirectory,
           size: file.size,
           mtime: new Date(file.mtime || Date.now()),
-          isVirtual: path === '/dev' || path.startsWith('/dev/')
+          isVirtual: path === '/dev' || path.startsWith('/dev/'),
+          isSymbolicLink: file.isSymlink === true
         };
         return { file, fullPath, stats };
       });
+      
+      // 在追加文件前再次检查并清空容器
+      checkRightCancelled();
+      if (rightList) rightList.innerHTML = '';
+      if (rightGrid) rightGrid.innerHTML = '';
       
       fileData.forEach(({ file, fullPath, stats }) => {
         if (this.rightPaneView === 'list' && rightList) {
@@ -3698,12 +4284,17 @@ class FileManager {
       });
       
       if (rightStatusText) {
-        rightStatusText.textContent = `${sortedFiles.length} 个项目`;
+        if (this.isFilterActive(this.rightPaneFilter)) {
+          rightStatusText.textContent = `${filteredFiles.length} / ${totalCount} 个项目 (已筛选)`;
+        } else {
+          rightStatusText.textContent = `${totalCount} 个项目`;
+        }
       }
       
       const calcToken = Date.now();
       this.autoCalcRightPanelSizes(fileData, calcToken);
     }).catch(err => {
+      if (err.message === 'cancelled') return;
       console.error('Failed to load right panel:', err);
     });
   }
@@ -3825,31 +4416,31 @@ class FileManager {
         btn.classList.add('active');
         
         const location = btn.dataset.location;
-        const homeDir = this.os.homedir();
+        const userPaths = this.vfs.getUserPaths();
         switch (location) {
           case 'home':
             this.goHome();
             break;
           case 'desktop':
-            this.loadDirectory('/');
+            this.loadDirectory(userPaths.desktop);
             break;
           case 'downloads':
-            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Downloads'));
+            this.loadDirectory(userPaths.downloads);
             break;
           case 'documents':
-            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Documents'));
+            this.loadDirectory(userPaths.documents);
             break;
           case 'pictures':
-            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Pictures'));
+            this.loadDirectory(userPaths.pictures);
             break;
           case 'music':
-            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Music'));
+            this.loadDirectory(userPaths.music);
             break;
           case 'videos':
-            this.loadDirectory(await this.vfs.toUnix(homeDir + '\\Videos'));
+            this.loadDirectory(userPaths.videos);
             break;
           case 'trash':
-            this.showDialog('回收站', '回收站功能需要系统支持', 'info');
+            this.loadDirectory(userPaths.recycleBin);
             break;
         }
       });
@@ -3907,9 +4498,18 @@ class FileManager {
       if (e.key === 'Delete') {
         e.preventDefault();
         if (this.selectedItems.length > 0) {
-          this.showDialog('确认删除', `确定要删除 ${this.selectedItems.length} 个项目吗？`, 'confirm', () => {
-            this.deleteItems();
-          });
+          const trashPath = this.vfs.getTrashPath();
+          const isInTrash = this.currentPath === trashPath.unix;
+          
+          if (isInTrash) {
+            this.showDialog('永久删除', `确定要永久删除 ${this.selectedItems.length} 个项目吗？此操作不可恢复！`, 'confirm', () => {
+              this.permanentlyDeleteItems();
+            });
+          } else {
+            this.showDialog('移到回收站', `确定要将 ${this.selectedItems.length} 个项目移到回收站吗？`, 'confirm', () => {
+              this.deleteItems();
+            });
+          }
         }
       }
       
@@ -4065,7 +4665,1136 @@ class FileManager {
       }, 100);
     }
   }
+
+  // ========== Launchpad 启动台 ==========
   
+  initLaunchpad() {
+    const { ipcRenderer } = require('electron');
+    this.ipcRenderer = ipcRenderer;
+    
+    // 启动台状态
+    this.launchpadState = {
+      isOpen: false,
+      isSearching: false,
+      results: [],
+      selectedIndex: -1,
+      mode: 'idle',
+      recentSearches: [],
+      recentRuns: [],
+      debounceTimer: null,
+      everythingAvailable: false,
+      everythingSearchAvailable: false,
+      everythingGuiAvailable: false,
+      isPathSearch: false
+    };
+    
+    // 从 config 文件加载历史（异步）
+    this.loadLaunchpadHistory();
+    
+    // 获取 DOM 元素
+    this.launchpadOverlay = document.getElementById('launchpad-overlay');
+    this.launchpadInput = document.getElementById('launchpad-input');
+    this.launchpadCloseBtn = document.getElementById('launchpad-close-btn');
+    this.launchpadSearchBtn = document.getElementById('launchpad-search-btn');
+    this.launchpadContent = document.getElementById('launchpad-content');
+    this.launchpadEmpty = document.getElementById('launchpad-empty');
+    this.launchpadResults = document.getElementById('launchpad-results');
+    this.launchpadResultsList = document.getElementById('launchpad-results-list');
+    this.launchpadFooter = document.getElementById('launchpad-footer');
+    this.launchpadHint = document.getElementById('launchpad-hint');
+    this.launchpadCount = document.getElementById('launchpad-count');
+    this.launchpadEverythingBtn = null; // removed
+    this.launchpadModeIndicator = document.getElementById('launchpad-mode-indicator');
+    this.launchpadRecentSearches = document.getElementById('launchpad-recent-searches');
+    this.launchpadRecentRuns = document.getElementById('launchpad-recent-runs');
+    
+    if (!this.launchpadOverlay) return;
+    
+    // 绑定事件
+    this.bindLaunchpadEvents();
+    
+    // 检查 Everything 可用性
+    this.checkEverything();
+  }
+  
+  async loadLaunchpadHistory() {
+    try {
+      const { ipcRenderer } = require('electron');
+      const result = await ipcRenderer.invoke('config-read-history');
+      if (result.success) {
+        this.launchpadState.recentSearches = result.searches || [];
+        this.launchpadState.recentRuns = result.runs || [];
+        // 加载完成后刷新 UI
+        this.renderLaunchpadEmpty();
+      }
+    } catch (e) {
+      console.error('Failed to load launchpad history:', e);
+    }
+  }
+  
+  saveLaunchpadHistory() {
+    try {
+      const { ipcRenderer } = require('electron');
+      ipcRenderer.invoke('config-write-history', {
+        searches: this.launchpadState.recentSearches.slice(0, 20),
+        runs: this.launchpadState.recentRuns.slice(0, 10)
+      }).catch(e => console.error('Failed to save launchpad history:', e));
+    } catch (e) {
+      console.error('Failed to save launchpad history:', e);
+    }
+  }
+  
+  addToRecentSearches(query) {
+    if (!query.trim()) return;
+    const idx = this.launchpadState.recentSearches.indexOf(query);
+    if (idx > -1) this.launchpadState.recentSearches.splice(idx, 1);
+    this.launchpadState.recentSearches.unshift(query);
+    this.launchpadState.recentSearches = this.launchpadState.recentSearches.slice(0, 20);
+    this.saveLaunchpadHistory();
+  }
+  
+  addToRecentRuns(command) {
+    if (!command.trim()) return;
+    const idx = this.launchpadState.recentRuns.indexOf(command);
+    if (idx > -1) this.launchpadState.recentRuns.splice(idx, 1);
+    this.launchpadState.recentRuns.unshift(command);
+    this.launchpadState.recentRuns = this.launchpadState.recentRuns.slice(0, 10);
+    this.saveLaunchpadHistory();
+  }
+  
+  clearRecentSearches() {
+    this.launchpadState.recentSearches = [];
+    this.saveLaunchpadHistory();
+    this.renderLaunchpadEmpty();
+  }
+  
+  clearRecentRuns() {
+    this.launchpadState.recentRuns = [];
+    this.saveLaunchpadHistory();
+    this.renderLaunchpadEmpty();
+  }
+  
+  bindLaunchpadEvents() {
+    // 打开启动台
+    document.getElementById('command-palette-btn')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.openLaunchpad();
+    });
+    
+    // 关闭按钮
+    this.launchpadCloseBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeLaunchpad();
+    });
+    
+    // 模式指示器：点击切换搜索/运行模式
+    this.launchpadModeIndicator?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.toggleLaunchpadMode();
+    });
+    
+    // 清空按钮
+    document.querySelectorAll('.launchpad-clear-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const type = btn.dataset.clear;
+        if (type === 'searches') {
+          this.clearRecentSearches();
+        } else if (type === 'runs') {
+          this.clearRecentRuns();
+        }
+      });
+    });
+    
+    // 点击背景关闭
+    this.launchpadOverlay?.addEventListener('click', (e) => {
+      if (e.target === this.launchpadOverlay) {
+        this.closeLaunchpad();
+      }
+    });
+    
+    // 输入事件
+    this.launchpadInput?.addEventListener('input', (e) => {
+      this.handleLaunchpadInput(e.target.value);
+    });
+    
+    // 键盘导航
+    this.launchpadInput?.addEventListener('keydown', (e) => {
+      this.handleLaunchpadKeyDown(e);
+    });
+    
+    // Esc 关闭（全局）
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.launchpadState.isOpen) {
+        this.closeLaunchpad();
+      }
+      // Ctrl+P 打开
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p' && !e.shiftKey) {
+        e.preventDefault();
+        this.openLaunchpad();
+      }
+    });
+  }
+  
+  handleSearchButtonClick() {
+    const value = (this.launchpadInput?.value || '').trim();
+    if (!value) return;
+    
+    if (this.launchpadState.mode === 'run' || value.startsWith('>')) {
+      this.runCommand(value.startsWith('>') ? value : value);
+      this.closeLaunchpad();
+    } else {
+      if (this.launchpadState.debounceTimer) {
+        clearTimeout(this.launchpadState.debounceTimer);
+        this.launchpadState.debounceTimer = null;
+      }
+      this.addToRecentSearches(value);
+      this.performSearch(value);
+    }
+  }
+  
+  toggleLaunchpadMode() {
+    const currentMode = this.launchpadState.mode;
+    const input = this.launchpadInput;
+    const value = (input?.value || '').trim();
+    
+    if (currentMode === 'search' || (!value && currentMode !== 'run')) {
+      // 切换到运行模式
+      this.launchpadState.mode = 'run';
+      this.updateLaunchpadModeUI();
+      if (input && !value) {
+        input.value = '>';
+        input.focus();
+      }
+    } else {
+      // 切换到搜索模式
+      this.launchpadState.mode = 'search';
+      this.updateLaunchpadModeUI();
+      if (input && value.startsWith('>')) {
+        input.value = value.substring(1);
+        this.handleLaunchpadInput(input.value);
+        input.focus();
+      }
+    }
+  }
+  
+  updateLaunchpadModeUI() {
+    const indicator = this.launchpadModeIndicator;
+    if (!indicator) return;
+    
+    const mode = this.launchpadState.mode;
+    
+    if (mode === 'run') {
+      indicator.textContent = '运行';
+      indicator.className = 'launchpad-mode-indicator is-visible mode-run';
+    } else if (mode === 'search') {
+      indicator.textContent = '搜索';
+      indicator.className = 'launchpad-mode-indicator is-visible mode-search';
+    } else {
+      indicator.textContent = '搜索';
+      indicator.className = 'launchpad-mode-indicator is-visible mode-search';
+    }
+    
+    this.updateHintForMode();
+  }
+  
+  updateHintForMode() {
+    const mode = this.launchpadState.mode;
+    if (this.launchpadHint) {
+      if (mode === 'run') {
+        this.launchpadHint.textContent = '输入命令后按 Enter 运行 · 点击标签切回搜索';
+      } else if (mode === 'search') {
+        this.launchpadHint.textContent = '输入文件名后按 Enter 搜索 · 输入 > 运行命令 · 点击标签切回运行';
+      } else {
+        this.launchpadHint.textContent = '输入文件名搜索 · 输入 > 前缀运行命令 · 点击标签切换模式';
+      }
+    }
+  }
+  
+  openLaunchpad() {
+    this.launchpadState.isOpen = true;
+    this.launchpadOverlay?.classList.remove('is-hidden');
+    this.launchpadState.mode = 'search';
+    this.updateLaunchpadModeUI();
+    this.launchpadInput?.focus();
+    this.launchpadInput?.select();
+    this.showLaunchpadEmpty();
+  }
+  
+  closeLaunchpad() {
+    this.launchpadState.isOpen = false;
+    this.launchpadState.results = [];
+    this.launchpadState.selectedIndex = -1;
+    this.launchpadOverlay?.classList.add('is-hidden');
+    if (this.launchpadInput) {
+      this.launchpadInput.value = '';
+    }
+  }
+  
+  renderLaunchpadEmpty() {
+    if (!this.launchpadEmpty || !this.launchpadRecentSearches || !this.launchpadRecentRuns) return;
+    
+    // 渲染最近搜索
+    if (this.launchpadState.recentSearches.length > 0) {
+      this.launchpadRecentSearches.innerHTML = this.launchpadState.recentSearches
+        .map(query => `
+          <div class="launchpad-recent-item" data-action="search" data-value="${this.escapeAttr(query)}">
+            <div class="launchpad-recent-item-icon">
+              <span data-icon="clock"></span>
+            </div>
+            <div class="launchpad-recent-item-name">${this.escapeHtml(query)}</div>
+          </div>
+        `).join('');
+    } else {
+      this.launchpadRecentSearches.innerHTML = '<div class="launchpad-no-history">暂无搜索记录</div>';
+    }
+    
+    // 渲染最近运行
+    if (this.launchpadState.recentRuns.length > 0) {
+      this.launchpadRecentRuns.innerHTML = this.launchpadState.recentRuns
+        .map(cmd => `
+          <div class="launchpad-recent-item" data-action="run" data-value="${this.escapeAttr(cmd)}">
+            <div class="launchpad-recent-item-icon">
+              <span data-icon="bolt"></span>
+            </div>
+            <div class="launchpad-recent-item-name">${this.escapeHtml(cmd)}</div>
+          </div>
+        `).join('');
+    } else {
+      this.launchpadRecentRuns.innerHTML = '<div class="launchpad-no-history">暂无运行记录</div>';
+    }
+    
+    // 添加点击事件
+    this.launchpadRecentSearches.querySelectorAll('.launchpad-recent-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const query = item.dataset.value;
+        if (query) {
+          this.launchpadInput.value = query;
+          this.handleLaunchpadInput(query);
+        }
+      });
+    });
+    
+    this.launchpadRecentRuns.querySelectorAll('.launchpad-recent-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const cmd = item.dataset.value;
+        if (cmd) {
+          this.launchpadInput.value = cmd;
+          this.runCommand(cmd);
+          this.closeLaunchpad();
+        }
+      });
+    });
+  }
+  
+  handleLaunchpadInput(value) {
+    if (this.launchpadState.debounceTimer) {
+      clearTimeout(this.launchpadState.debounceTimer);
+    }
+    
+    value = (value || '').toString();
+    
+    // 检测模式
+    this.updateLaunchpadMode(value);
+    
+    if (!value.trim()) {
+      this.showLaunchpadEmpty();
+      return;
+    }
+    
+    // 如果以 > 开头，直接运行模式
+    if (value.startsWith('>')) {
+      // 更新底部提示为运行模式
+      if (this.launchpadCount) this.launchpadCount.textContent = '';
+      if (this.launchpadHint) {
+        this.launchpadHint.textContent = '按 Enter 运行 · Esc 关闭';
+      }
+      return;
+    }
+    
+    // 防抖搜索
+    this.launchpadState.debounceTimer = setTimeout(() => {
+      this.performSearch(value);
+    }, 200);
+  }
+  
+  updateLaunchpadMode(value) {
+    if (!this.launchpadModeIndicator) return;
+    
+    if (!value || !value.trim()) {
+      this.launchpadState.mode = 'idle';
+      this.launchpadModeIndicator.textContent = '搜索';
+      this.launchpadModeIndicator.className = 'launchpad-mode-indicator is-visible mode-search';
+      this.updateHintForMode();
+      return;
+    }
+    
+    if (value.startsWith('>')) {
+      this.launchpadState.mode = 'run';
+    } else if (value.startsWith('http://') || value.startsWith('https://')) {
+      this.launchpadState.mode = 'run';
+    } else {
+      this.launchpadState.mode = 'search';
+    }
+    
+    this.updateLaunchpadModeUI();
+  }
+  
+  showLaunchpadEmpty() {
+    this.launchpadEmpty?.classList.remove('is-hidden');
+    this.launchpadResults?.classList.add('is-hidden');
+    if (this.launchpadCount) this.launchpadCount.textContent = '';
+    
+    // 根据模式显示不同提示
+    this.updateHintForMode();
+    this.renderLaunchpadEmpty();
+  }
+  
+  showLaunchpadResults() {
+    this.launchpadEmpty?.classList.add('is-hidden');
+    this.launchpadResults?.classList.remove('is-hidden');
+  }
+  
+  async performSearch(query) {
+    if (!this.ipcRenderer) return;
+    
+    this.launchpadState.isSearching = true;
+    this.showLaunchpadResults();
+    
+    try {
+      const result = await this.ipcRenderer.invoke('launchpad-search', {
+        query: query,
+        maxResults: 50
+      });
+      
+      if (result.error) {
+        this.launchpadResultsList.innerHTML = `
+          <div style="padding: 20px; text-align: center; color: var(--muted-foreground);">
+            <span data-icon="error" style="display:inline-block; margin-bottom:8px;"></span>
+            <div style="font-size: 13px;">${this.escapeHtml(result.error)}</div>
+          </div>
+        `;
+        if (this.launchpadCount) this.launchpadCount.textContent = '';
+        if (this.launchpadHint) this.launchpadHint.textContent = '搜索出错 · 按 Enter 重试 · Esc 关闭';
+        return;
+      }
+      
+      this.launchpadState.results = result.results || [];
+      this.launchpadState.selectedIndex = this.launchpadState.results.length > 0 ? 0 : -1;
+      this.launchpadState.isPathSearch = result.pathSearch || false;
+      this.renderResults(query);
+      
+    } catch (err) {
+      console.error('Search failed:', err);
+      this.launchpadResultsList.innerHTML = `
+        <div style="padding: 20px; text-align: center; color: var(--destructive);">
+          <div style="font-size: 13px;">搜索失败: ${this.escapeHtml(err.message)}</div>
+        </div>
+      `;
+      if (this.launchpadCount) this.launchpadCount.textContent = '';
+      if (this.launchpadHint) this.launchpadHint.textContent = '搜索异常 · 按 Enter 重试 · Esc 关闭';
+    } finally {
+      this.launchpadState.isSearching = false;
+    }
+  }
+  
+  renderResults(query) {
+    if (!this.launchpadResultsList) return;
+    
+    const results = this.launchpadState.results;
+    const isPathSearch = this.launchpadState.isPathSearch;
+    
+    this.showLaunchpadResults();
+    
+    if (results.length === 0) {
+      this.launchpadResultsList.innerHTML = `
+        <div style="padding: 30px 20px; text-align: center; color: var(--muted-foreground);">
+          <span data-icon="search" style="display:inline-block; margin-bottom:12px; opacity:0.5;"></span>
+          <div style="font-size: 13px; margin-bottom:4px;">未找到匹配的文件</div>
+          <div style="font-size: 11px; opacity:0.7;">尝试其他关键词或使用更短的搜索词</div>
+        </div>
+      `;
+      if (this.launchpadCount) this.launchpadCount.textContent = '';
+      if (this.launchpadHint) this.launchpadHint.textContent = '无结果 · 按 Enter 强制重试 · 按 Esc 关闭';
+      return;
+    }
+    
+    this.launchpadResultsList.innerHTML = results.map((item, idx) => {
+      const nameIcon = this.getFileIcon({ 
+        name: item.name, 
+        isDirectory: item.isDirectory 
+      });
+      
+      const sourceLabel = isPathSearch ? '<span class="launchpad-result-source">PATH</span>' : '';
+      
+      return `
+        <div class="launchpad-result-item ${idx === this.launchpadState.selectedIndex ? 'is-selected' : ''}" 
+             data-index="${idx}" 
+             data-path="${this.escapeAttr(item.path)}"
+             data-name="${this.escapeAttr(item.name)}"
+             data-is-directory="${item.isDirectory}"
+             data-is-path-search="${isPathSearch}">
+          <div class="launchpad-result-icon">
+            ${nameIcon}
+          </div>
+          <div class="launchpad-result-info">
+            <div class="launchpad-result-name">${this.highlightMatch(item.name, query)}${sourceLabel}</div>
+            <div class="launchpad-result-meta">
+              <span class="launchpad-result-size">${item.isDirectory ? '📁 文件夹' : this.formatSize(item.size)}</span>
+              <span class="launchpad-result-path">${this.escapeHtml(item.path)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+    // 更新底部提示
+    if (this.launchpadCount) this.launchpadCount.textContent = `${results.length} 个结果`;
+    
+    if (isPathSearch) {
+      if (this.launchpadHint) this.launchpadHint.textContent = '↑↓ 选择 · Enter 运行 · Esc 关闭';
+    } else {
+      if (this.launchpadHint) {
+        this.launchpadHint.textContent = '↑↓ 选择 · Enter 打开 · Ctrl+Enter 定位';
+      }
+    }
+    
+    // 添加点击事件
+    this.launchpadResultsList.querySelectorAll('.launchpad-result-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const index = parseInt(item.dataset.index);
+        this.launchpadState.selectedIndex = index;
+        this.updateSelectedResult();
+        this.openSelectedResult();
+      });
+      item.addEventListener('mouseenter', () => {
+        const index = parseInt(item.dataset.index);
+        this.launchpadState.selectedIndex = index;
+        this.updateSelectedResult();
+      });
+    });
+  }
+  
+  updateSelectedResult() {
+    this.launchpadResultsList?.querySelectorAll('.launchpad-result-item').forEach((item, idx) => {
+      if (idx === this.launchpadState.selectedIndex) {
+        item.classList.add('is-selected');
+        item.scrollIntoView({ block: 'nearest' });
+      } else {
+        item.classList.remove('is-selected');
+      }
+    });
+  }
+  
+  highlightMatch(text, query) {
+    if (!query) return this.escapeHtml(text);
+    
+    const lowerText = text.toLowerCase();
+    const lowerQuery = query.toLowerCase();
+    const idx = lowerText.indexOf(lowerQuery);
+    
+    if (idx === -1) {
+      return this.escapeHtml(text);
+    }
+    
+    return `${this.escapeHtml(text.substring(0, idx))}<mark>${this.escapeHtml(text.substring(idx, idx + query.length))}</mark>${this.escapeHtml(text.substring(idx + query.length))}`;
+  }
+  
+  handleLaunchpadKeyDown(e) {
+    if (!this.launchpadState.isOpen) return;
+    
+    const value = (this.launchpadInput?.value || '').trim();
+    const mode = this.launchpadState.mode;
+    const results = this.launchpadState.results;
+    
+    // Enter 键 - 根据模式处理
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      
+      if (mode === 'run' || mode === 'idle') {
+        // 运行模式或空输入：直接执行
+        if (!value) return;
+        this.runCommand(value.startsWith('>') ? value : value);
+        this.closeLaunchpad();
+        return;
+      }
+      
+      if (mode === 'search') {
+        if (!value) return;
+        
+        if (results.length > 0) {
+          // 有结果：打开选中项
+          if (e.ctrlKey) {
+            this.locateSelectedResult();
+          } else {
+            this.openSelectedResult();
+          }
+        } else {
+          // 无结果：立即触发搜索
+          if (this.launchpadState.debounceTimer) {
+            clearTimeout(this.launchpadState.debounceTimer);
+            this.launchpadState.debounceTimer = null;
+          }
+          this.addToRecentSearches(value);
+          this.performSearch(value);
+        }
+        return;
+      }
+      
+      // 其他情况（空值、未知模式）：强制搜索
+      if (value) {
+        if (this.launchpadState.debounceTimer) {
+          clearTimeout(this.launchpadState.debounceTimer);
+          this.launchpadState.debounceTimer = null;
+        }
+        this.addToRecentSearches(value);
+        this.performSearch(value);
+      }
+      return;
+    }
+    
+    // 导航键
+    if (results.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.launchpadState.selectedIndex = (this.launchpadState.selectedIndex + 1) % results.length;
+        this.updateSelectedResult();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.launchpadState.selectedIndex = (this.launchpadState.selectedIndex - 1 + results.length) % results.length;
+        this.updateSelectedResult();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const selected = results[this.launchpadState.selectedIndex];
+        if (selected) {
+          this.launchpadInput.value = selected.name;
+          this.handleLaunchpadInput(selected.name);
+        }
+      }
+    }
+  }
+  
+  openSelectedResult() {
+    const results = this.launchpadState.results;
+    const selected = results[this.launchpadState.selectedIndex];
+    if (!selected) return;
+    
+    const isPathSearch = this.launchpadState.isPathSearch;
+    
+    this.addToRecentSearches(selected.name);
+    
+    if (isPathSearch) {
+      if (selected.isDirectory) {
+        this.ipcRenderer?.invoke('launchpad-run', {
+          command: selected.path,
+          type: 'folder'
+        });
+      } else {
+        this.ipcRenderer?.invoke('launchpad-run', {
+          command: selected.path,
+          type: 'file'
+        });
+      }
+      this.closeLaunchpad();
+      return;
+    }
+    
+    if (selected.isDirectory) {
+      this.navigateTo(selected.path);
+      this.closeLaunchpad();
+    } else {
+      this.openFileInSystem(selected.path);
+      this.closeLaunchpad();
+    }
+  }
+  
+  async locateSelectedResult() {
+    const results = this.launchpadState.results;
+    const selected = results[this.launchpadState.selectedIndex];
+    if (!selected || !this.ipcRenderer) return;
+    
+    try {
+      await this.ipcRenderer.invoke('launchpad-locate', { path: selected.path });
+    } catch (err) {
+      console.error('Failed to locate file:', err);
+    }
+  }
+  
+  async openInEverything(query) {
+    if (!this.ipcRenderer || !query.trim()) return;
+    
+    try {
+      let winPath = null;
+      if (this.currentPath && this.vfs) {
+        try {
+          winPath = await this.vfs.toWindows(this.currentPath);
+        } catch (e) { /* ignore */ }
+      }
+      
+      const result = await this.ipcRenderer.invoke('launchpad-open-everything', {
+        query: query,
+        path: winPath
+      });
+      
+      if (result.success) {
+        this.closeLaunchpad();
+      } else {
+        console.error('Failed to open Everything:', result.error);
+        this.showToast?.(`无法打开 Everything: ${result.error}`, 'error');
+      }
+    } catch (err) {
+      console.error('Failed to open Everything:', err);
+    }
+  }
+  
+  runCommand(command) {
+    if (!this.ipcRenderer || !command.trim()) return;
+    
+    const originalCommand = command;
+    this.addToRecentRuns(originalCommand);
+    
+    let type = 'command';
+    let target = command.trim();
+    
+    // 去掉前缀
+    if (target.startsWith('>')) {
+      target = target.substring(1).trim();
+    }
+    
+    // 判断类型
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      type = 'url';
+    } else if (target.startsWith('es:') || target.startsWith('everything:')) {
+      target = target.replace(/^(es:|everything:)/, '').trim();
+      type = 'everything';
+    } else if (target.endsWith('.exe') || target.endsWith('.cmd') || 
+               target.endsWith('.bat') || target.endsWith('.lnk')) {
+      type = 'file';
+    } else if (target.match(/^[A-Z]:\\/) || target.match(/^\\\\/)) {
+      type = 'file';
+    }
+    
+    this.ipcRenderer.invoke('launchpad-run', {
+      command: target,
+      type: type
+    }).then(result => {
+      if (!result.success) {
+        console.error('Command failed:', result.error);
+        this.showToast?.(`执行失败: ${result.error}`, 'error');
+      }
+    }).catch(err => {
+      console.error('Failed to run command:', err);
+    });
+  }
+  
+  openFileInSystem(path) {
+    if (!this.ipcRenderer) return;
+    this.ipcRenderer.invoke('launchpad-run', {
+      command: path,
+      type: 'file'
+    }).catch(err => console.error('Failed to open file:', err));
+  }
+  
+  async checkEverything() {
+    if (!this.ipcRenderer) return;
+    
+    try {
+      const result = await this.ipcRenderer.invoke('launchpad-check-everything');
+      this.launchpadState.everythingAvailable = result.available;
+      this.launchpadState.everythingSearchAvailable = result.searchAvailable;
+      this.launchpadState.everythingGuiAvailable = result.guiAvailable;
+      
+      if (!result.available) {
+        console.warn('Everything not available. 请在设置面板配置 Everything 路径');
+      } else {
+        console.log('Everything ready, search:', result.searchAvailable ? 'yes' : 'no', 
+                    'gui:', result.guiAvailable ? 'yes' : 'no');
+      }
+    } catch (err) {
+      console.error('Failed to check Everything:', err);
+    }
+  }
+  
+  escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+  
+  escapeAttr(str) {
+    return this.escapeHtml(str).replace(/"/g, '&quot;');
+  }
+  
+  formatSize(size) {
+    const num = parseFloat(size);
+    if (isNaN(num)) return size;
+    if (num === 0) return '0 B';
+    if (num < 1024) return num + ' B';
+    if (num < 1024 * 1024) return (num / 1024).toFixed(1) + ' KB';
+    if (num < 1024 * 1024 * 1024) return (num / (1024 * 1024)).toFixed(1) + ' MB';
+    return (num / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+  }
+  
+  // ===== Settings Panel =====
+  
+  initSettings() {
+    // 设置状态
+    this.settingsState = {
+      isOpen: false,
+      currentTab: 'general',
+      configPath: ''
+    };
+    
+    // 获取 DOM 元素
+    this.settingsOverlay = document.getElementById('settings-overlay');
+    this.settingsCloseBtn = document.getElementById('settings-close-btn');
+    this.settingsTabs = document.querySelectorAll('.settings-tab');
+    this.settingsTabPanels = document.querySelectorAll('.settings-tab-panel');
+    
+    // 通用设置
+    this.settingStartPage = document.getElementById('setting-start-page');
+    this.settingDefaultView = document.getElementById('setting-default-view');
+    this.settingLanguage = document.getElementById('setting-language');
+    this.settingConfirmDelete = document.getElementById('setting-confirm-delete');
+    this.settingShowHidden = document.getElementById('setting-show-hidden');
+    this.settingDoubleClick = document.getElementById('setting-double-click');
+    
+    // 搜索设置
+    this.settingEverythingPath = document.getElementById('setting-everything-path');
+    this.settingEverythingEnabled = document.getElementById('setting-everything-enabled');
+    this.settingAutoIndex = document.getElementById('setting-auto-index');
+    this.settingSearchDepth = document.getElementById('setting-search-depth');
+    this.settingSaveHistory = document.getElementById('setting-save-history');
+    this.settingClearHistoryBtn = document.getElementById('setting-clear-history');
+    
+    // 外观设置
+    this.settingTheme = document.getElementById('setting-theme');
+    this.settingAccentColors = document.querySelectorAll('.setting-color-swatch');
+    this.settingFontSize = document.getElementById('setting-font-size');
+    this.settingFontSizeValue = document.getElementById('setting-font-size-value');
+    
+    // 关于设置
+    this.settingConfigPath = document.getElementById('setting-config-path');
+    this.settingOpenConfig = document.getElementById('setting-open-config');
+    this.settingCheckUpdate = document.getElementById('setting-check-update');
+    this.settingResetSettings = document.getElementById('setting-reset-settings');
+    
+    if (!this.settingsOverlay) return;
+    
+    // 绑定事件
+    this.bindSettingsEvents();
+    
+    // 加载设置
+    this.loadSettings();
+  }
+  
+  bindSettingsEvents() {
+    // 设置按钮点击
+    const settingsBtn = document.getElementById('settings-btn');
+    settingsBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.openSettings();
+    });
+    
+    // 关闭按钮
+    this.settingsCloseBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeSettings();
+    });
+    
+    // 点击背景关闭
+    this.settingsOverlay?.addEventListener('click', (e) => {
+      if (e.target === this.settingsOverlay) {
+        this.closeSettings();
+      }
+    });
+    
+    // 标签切换
+    this.settingsTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const tabName = tab.dataset.tab;
+        this.switchSettingsTab(tabName);
+      });
+    });
+    
+    // 搜索深度变更
+    this.settingSearchDepth?.addEventListener('change', () => {
+      this.saveSettings();
+    });
+    
+    // 清空历史按钮
+    this.settingClearHistoryBtn?.addEventListener('click', () => {
+      if (confirm('确定要清空所有历史记录吗？')) {
+        try {
+          this.ipcRenderer.invoke('config-write-history', { searches: [], runs: [] });
+          if (this.launchpadState) {
+            this.launchpadState.recentSearches = [];
+            this.launchpadState.recentRuns = [];
+            this.renderLaunchpadEmpty();
+          }
+          alert('历史记录已清空');
+        } catch (e) {
+          console.error('Failed to clear history:', e);
+        }
+      }
+    });
+    
+    // 强调色选择
+    this.settingAccentColors.forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        const color = swatch.dataset.color;
+        this.settingAccentColors.forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        this.saveSettings();
+      });
+    });
+    
+    // 字体大小滑块
+    this.settingFontSize?.addEventListener('input', (e) => {
+      this.settingFontSizeValue.textContent = e.target.value;
+    });
+    
+    this.settingFontSize?.addEventListener('change', () => {
+      this.saveSettings();
+    });
+    
+    // 开关类设置
+    [this.settingConfirmDelete, this.settingShowHidden, this.settingDoubleClick,
+     this.settingEverythingEnabled, this.settingAutoIndex, this.settingSaveHistory].forEach(checkbox => {
+      checkbox?.addEventListener('change', () => {
+        this.saveSettings();
+      });
+    });
+    
+    // 下拉选择
+    [this.settingStartPage, this.settingDefaultView, this.settingLanguage, this.settingTheme].forEach(select => {
+      select?.addEventListener('change', () => {
+        this.saveSettings();
+      });
+    });
+    
+    // 输入框
+    this.settingEverythingPath?.addEventListener('change', () => {
+      this.saveSettings();
+    });
+    
+    // 打开配置目录
+    this.settingOpenConfig?.addEventListener('click', () => {
+      if (this.ipcRenderer) {
+        this.ipcRenderer.invoke('config-open-dir').catch(err => {
+          console.error('Failed to open config dir:', err);
+        });
+      }
+    });
+    
+    // 检查更新
+    this.settingCheckUpdate?.addEventListener('click', () => {
+      alert('当前已是最新版本');
+    });
+    
+    // 恢复默认设置
+    this.settingResetSettings?.addEventListener('click', () => {
+      if (confirm('确定要恢复所有设置为默认值吗？这将重置您的所有偏好设置。')) {
+        this.resetToDefaults();
+      }
+    });
+    
+    // Esc 关闭
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.settingsState.isOpen) {
+        this.closeSettings();
+      }
+    });
+  }
+  
+  openSettings() {
+    this.settingsState.isOpen = true;
+    this.settingsOverlay?.classList.remove('is-hidden');
+    // 注入设置面板中的图标
+    this.injectIcons(this.settingsOverlay);
+    // 加载配置路径信息
+    this.updateConfigPathInfo();
+  }
+  
+  closeSettings() {
+    this.settingsState.isOpen = false;
+    this.settingsOverlay?.classList.add('is-hidden');
+    // 保存当前设置
+    this.saveSettings();
+  }
+  
+  switchSettingsTab(tabName) {
+    this.settingsState.currentTab = tabName;
+    
+    // 更新标签激活状态
+    this.settingsTabs.forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+    
+    // 更新面板显示
+    this.settingsTabPanels.forEach(panel => {
+      panel.classList.toggle('active', panel.dataset.panel === tabName);
+    });
+  }
+  
+  async loadSettings() {
+    try {
+      const { ipcRenderer } = require('electron');
+      this.ipcRenderer = ipcRenderer;
+      
+      const result = await ipcRenderer.invoke('config-read-settings');
+      if (result.success && result.settings) {
+        this.applySettings(result.settings);
+      }
+    } catch (e) {
+      console.error('Failed to load settings:', e);
+    }
+  }
+  
+  applySettings(settings) {
+    if (!settings) return;
+    
+    // 通用设置
+    if (settings.startPage && this.settingStartPage) {
+      this.settingStartPage.value = settings.startPage;
+    }
+    if (settings.defaultView && this.settingDefaultView) {
+      this.settingDefaultView.value = settings.defaultView;
+      if (settings.defaultView !== this.currentView) {
+        this.switchView(settings.defaultView);
+      }
+    }
+    if (settings.language && this.settingLanguage) {
+      this.settingLanguage.value = settings.language;
+    }
+    if (settings.confirmDelete !== undefined && this.settingConfirmDelete) {
+      this.settingConfirmDelete.checked = settings.confirmDelete;
+    }
+    if (settings.showHidden !== undefined && this.settingShowHidden) {
+      this.settingShowHidden.checked = settings.showHidden;
+    }
+    if (settings.doubleClick !== undefined && this.settingDoubleClick) {
+      this.settingDoubleClick.checked = settings.doubleClick;
+    }
+    
+    // 搜索设置
+    if (settings.everythingPath && this.settingEverythingPath) {
+      this.settingEverythingPath.value = settings.everythingPath;
+    }
+    if (settings.everythingEnabled !== undefined && this.settingEverythingEnabled) {
+      this.settingEverythingEnabled.checked = settings.everythingEnabled;
+    }
+    if (settings.autoIndex !== undefined && this.settingAutoIndex) {
+      this.settingAutoIndex.checked = settings.autoIndex;
+    }
+    if (settings.searchDepth && this.settingSearchDepth) {
+      this.settingSearchDepth.value = settings.searchDepth;
+    }
+    if (settings.saveHistory !== undefined && this.settingSaveHistory) {
+      this.settingSaveHistory.checked = settings.saveHistory;
+    }
+    
+    // 外观设置
+    if (settings.theme && this.settingTheme) {
+      this.settingTheme.value = settings.theme;
+      this.applyTheme(settings.theme);
+    }
+    if (settings.accentColor && this.settingAccentColors) {
+      this.settingAccentColors.forEach(swatch => {
+        swatch.classList.toggle('active', swatch.dataset.color === settings.accentColor);
+      });
+    }
+    if (settings.fontSize !== undefined && this.settingFontSize) {
+      this.settingFontSize.value = settings.fontSize;
+      this.settingFontSizeValue.textContent = settings.fontSize;
+      this.applyFontSize(settings.fontSize);
+    }
+  }
+  
+  saveSettings() {
+    const settings = {
+      startPage: this.settingStartPage?.value || 'home',
+      defaultView: this.settingDefaultView?.value || 'list',
+      language: this.settingLanguage?.value || 'zh-CN',
+      confirmDelete: this.settingConfirmDelete?.checked ?? true,
+      showHidden: this.settingShowHidden?.checked ?? false,
+      doubleClick: this.settingDoubleClick?.checked ?? true,
+      everythingPath: this.settingEverythingPath?.value || '',
+      everythingEnabled: this.settingEverythingEnabled?.checked ?? true,
+      autoIndex: this.settingAutoIndex?.checked ?? true,
+      searchDepth: parseInt(this.settingSearchDepth?.value) || 5,
+      saveHistory: this.settingSaveHistory?.checked ?? true,
+      theme: this.settingTheme?.value || 'dark',
+      accentColor: this.getActiveAccentColor(),
+      fontSize: parseInt(this.settingFontSize?.value) || 14
+    };
+    
+    try {
+      if (this.ipcRenderer) {
+        this.ipcRenderer.invoke('config-write-settings', settings)
+          .catch(e => console.error('Failed to save settings:', e));
+      }
+    } catch (e) {
+      console.error('Failed to save settings:', e);
+    }
+  }
+  
+  getActiveAccentColor() {
+    const active = document.querySelector('.setting-color-swatch.active');
+    return active?.dataset.color || 'blue';
+  }
+  
+  applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+  }
+  
+  applyFontSize(size) {
+    document.documentElement.style.fontSize = `${size}px`;
+  }
+  
+  async updateConfigPathInfo() {
+    try {
+      if (this.ipcRenderer) {
+        const result = await this.ipcRenderer.invoke('config-get-path');
+        if (result.success && this.settingConfigPath) {
+          this.settingsState.configPath = result.path;
+          // 显示简化路径
+          const displayPath = result.path.length > 60 
+            ? '...' + result.path.slice(-55) 
+            : result.path;
+          this.settingConfigPath.textContent = displayPath;
+          this.settingConfigPath.title = result.path;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to get config path:', e);
+    }
+  }
+  
+  resetToDefaults() {
+    const defaults = {
+      startPage: 'home',
+      defaultView: 'list',
+      language: 'zh-CN',
+      confirmDelete: true,
+      showHidden: false,
+      doubleClick: true,
+      everythingPath: '',
+      everythingEnabled: true,
+      autoIndex: true,
+      searchDepth: 5,
+      saveHistory: true,
+      theme: 'dark',
+      accentColor: 'blue',
+      fontSize: 14
+    };
+    
+    this.applySettings(defaults);
+    this.saveSettings();
+    alert('设置已恢复为默认值');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

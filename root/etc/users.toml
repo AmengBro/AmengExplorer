@@ -1,0 +1,11 @@
+# Ameng User Configuration
+# Auto-generated - do not edit manually unless you know what you're doing
+
+[global]
+current_user = "root"
+
+[user.root]
+permission = "root"
+
+[user.AmengBro]
+permission = "sudo"
