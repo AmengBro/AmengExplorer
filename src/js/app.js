@@ -2311,26 +2311,28 @@ class FileManager {
     if (process.platform === 'win32') {
       const { execSync } = require('child_process');
       try {
-        const output = execSync('wmic logicaldisk get caption,description /format:csv', { encoding: 'utf-8' });
-        const lines = output.split('\n').filter(line => line.trim());
+        // 优先使用程序目录内置的便携版 pwsh7（兼容 Windows PE）；wmic 已弃用
+        const pwsh = this.getPowerShellPath();
+        const script = 'Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 } | Select-Object DeviceID, VolumeName | ConvertTo-Json -Compress';
+        const encoded = Buffer.from(script, 'utf16le').toString('base64');
+        const output = execSync(`"${pwsh}" -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { encoding: 'utf-8', timeout: 10000 });
+        const parsed = JSON.parse(output.trim());
+        const disks = Array.isArray(parsed) ? parsed : (parsed && parsed.DeviceID ? [parsed] : []);
         
-        lines.forEach(line => {
-          const parts = line.split(',');
-          if (parts.length >= 2) {
-            const caption = parts[0].trim();
-            const description = parts[1].trim();
-            if (caption && caption.length === 2 && caption.endsWith(':')) {
-              const unixPath = this.vfs.toUnix(`${caption}\\`);
-              console.log(`getSystemDrives: ${caption}\\ -> ${unixPath}`);
-              drives.push({
-                name: `${description} (${caption})`,
-                path: unixPath,
-                type: 'local',
-              });
-            }
+        disks.forEach(disk => {
+          const caption = disk.DeviceID;
+          if (caption && caption.length === 2 && caption.endsWith(':')) {
+            const unixPath = this.vfs.toUnix(`${caption}\\`);
+            const label = disk.VolumeName ? disk.VolumeName : '本地磁盘';
+            drives.push({
+              name: `${label} (${caption})`,
+              path: unixPath,
+              type: 'local',
+            });
           }
         });
       } catch (err) {
+        // 兜底：直接扫描盘符（无 pwsh / PE 环境）
         for (let i = 67; i <= 90; i++) {
           const letter = String.fromCharCode(i);
           const path = `${letter}:`;
@@ -2382,22 +2384,20 @@ class FileManager {
     try {
       const { execSync } = require('child_process');
       if (process.platform === 'win32') {
-        const output = execSync(`wmic logicaldisk where caption="${path.charAt(0)}:" get freespace,size /format:csv`, { encoding: 'utf-8' });
-        const lines = output.split('\n').filter(line => line.trim());
-        if (lines.length >= 2) {
-          const parts = lines[1].split(',');
-          if (parts.length >= 2) {
-            const freeSpace = parseInt(parts[0].trim());
-            const totalSize = parseInt(parts[1].trim());
-            if (!isNaN(freeSpace) && !isNaN(totalSize) && totalSize > 0) {
-              const used = totalSize - freeSpace;
-              return {
-                used: (used / (1024 * 1024 * 1024)).toFixed(1),
-                total: (totalSize / (1024 * 1024 * 1024)).toFixed(1),
-                percent: Math.round((used / totalSize) * 100),
-              };
-            }
-          }
+        const pwsh = this.getPowerShellPath();
+        const script = `$d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${path.charAt(0)}:'"; if ($d) { [PSCustomObject]@{ Free = [int64]$d.FreeSpace; Size = [int64]$d.Size } | ConvertTo-Json -Compress }`;
+        const encoded = Buffer.from(script, 'utf16le').toString('base64');
+        const output = execSync(`"${pwsh}" -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { encoding: 'utf-8', timeout: 10000 });
+        const data = JSON.parse(output.trim());
+        if (data && data.Size > 0) {
+          const freeSpace = data.Free;
+          const totalSize = data.Size;
+          const used = totalSize - freeSpace;
+          return {
+            used: (used / (1024 * 1024 * 1024)).toFixed(1),
+            total: (totalSize / (1024 * 1024 * 1024)).toFixed(1),
+            percent: Math.round((used / totalSize) * 100),
+          };
         }
       } else {
         const output = execSync(`df -k "${path}"`, { encoding: 'utf-8' });
@@ -2418,6 +2418,19 @@ class FileManager {
     } catch (err) {
     }
     return null;
+  }
+
+  // 获取 PowerShell 路径：优先主进程解析（程序目录内置 pwsh7，兼容 Windows PE）
+  getPowerShellPath() {
+    try {
+      const electron = require('electron');
+      if (electron && electron.ipcRenderer) {
+        const p = electron.ipcRenderer.sendSync('pwsh-get-path');
+        if (p) return p;
+      }
+    } catch (e) {
+    }
+    return 'pwsh';
   }
   
   refresh() {
@@ -2997,7 +3010,8 @@ class FileManager {
       
       fs.writeFileSync(tempFile, psScript, 'utf8');
       
-      const { stdout, stderr } = await execPromise(`powershell -ExecutionPolicy Bypass -File "${tempFile}"`, {
+      const pwsh = this.getPowerShellPath();
+      const { stdout, stderr } = await execPromise(`"${pwsh}" -NoProfile -ExecutionPolicy Bypass -File "${tempFile}"`, {
         timeout: 10000
       });
       
@@ -3082,7 +3096,8 @@ class FileManager {
       
       fs.writeFileSync(tempFile, psScript, 'utf8');
       
-      exec(`powershell -ExecutionPolicy Bypass -File "${tempFile}"`, (err) => {
+      const pwsh = this.getPowerShellPath();
+      exec(`"${pwsh}" -NoProfile -ExecutionPolicy Bypass -File "${tempFile}"`, (err) => {
         fs.unlinkSync(tempFile);
         if (err) {
           console.error('executeShellVerb error:', err.message);
@@ -3151,7 +3166,7 @@ class FileManager {
           const srcWinPath = await this.vfs.toWindows(sourcePath);
           const destWinPath = await this.vfs.toWindows(destPath);
           if (srcWinPath && destWinPath) {
-            fs.renameSync(srcWinPath, destWinPath);
+            this.movePathWithFallback(fs, srcWinPath, destWinPath);
           }
         }
       } catch (err) {
@@ -3177,6 +3192,21 @@ class FileManager {
     this.copyBuffer = [];
     this.copyMode = 'copy';
     this.refresh();
+  }
+
+  // 移动文件/目录：同卷 rename；跨卷（EXDEV）时复制后删除
+  movePathWithFallback(fs, src, dest) {
+    try {
+      fs.renameSync(src, dest);
+      return true;
+    } catch (err) {
+      if (err.code === 'EXDEV') {
+        fs.cpSync(src, dest, { recursive: true, force: true });
+        fs.rmSync(src, { recursive: true, force: true });
+        return true;
+      }
+      throw err;
+    }
   }
   
   async copyRecursive(source, dest, task = null) {
@@ -3278,8 +3308,8 @@ class FileManager {
           counter++;
         }
         
-        // Move to trash
-        fs.renameSync(winPath, destWin);
+        // Move to trash（跨卷时自动复制+删除）
+        this.movePathWithFallback(fs, winPath, destWin);
         console.log(`Moved to trash: ${winPath} -> ${destWin}`);
         
       } catch (err) {
@@ -3301,7 +3331,7 @@ class FileManager {
       
       if (!srcWin || !destWin) throw new Error('无法解析路径');
       
-      fs.renameSync(srcWin, destWin);
+      this.movePathWithFallback(fs, srcWin, destWin);
       console.log(`Restored: ${srcWin} -> ${destWin}`);
       this.refresh();
       return true;
@@ -4682,9 +4712,6 @@ class FileManager {
       recentSearches: [],
       recentRuns: [],
       debounceTimer: null,
-      everythingAvailable: false,
-      everythingSearchAvailable: false,
-      everythingGuiAvailable: false,
       isPathSearch: false
     };
     
@@ -4703,7 +4730,6 @@ class FileManager {
     this.launchpadFooter = document.getElementById('launchpad-footer');
     this.launchpadHint = document.getElementById('launchpad-hint');
     this.launchpadCount = document.getElementById('launchpad-count');
-    this.launchpadEverythingBtn = null; // removed
     this.launchpadModeIndicator = document.getElementById('launchpad-mode-indicator');
     this.launchpadRecentSearches = document.getElementById('launchpad-recent-searches');
     this.launchpadRecentRuns = document.getElementById('launchpad-recent-runs');
@@ -4713,8 +4739,6 @@ class FileManager {
     // 绑定事件
     this.bindLaunchpadEvents();
     
-    // 检查 Everything 可用性
-    this.checkEverything();
   }
   
   async loadLaunchpadHistory() {
@@ -5322,33 +5346,6 @@ class FileManager {
     }
   }
   
-  async openInEverything(query) {
-    if (!this.ipcRenderer || !query.trim()) return;
-    
-    try {
-      let winPath = null;
-      if (this.currentPath && this.vfs) {
-        try {
-          winPath = await this.vfs.toWindows(this.currentPath);
-        } catch (e) { /* ignore */ }
-      }
-      
-      const result = await this.ipcRenderer.invoke('launchpad-open-everything', {
-        query: query,
-        path: winPath
-      });
-      
-      if (result.success) {
-        this.closeLaunchpad();
-      } else {
-        console.error('Failed to open Everything:', result.error);
-        this.showToast?.(`无法打开 Everything: ${result.error}`, 'error');
-      }
-    } catch (err) {
-      console.error('Failed to open Everything:', err);
-    }
-  }
-  
   runCommand(command) {
     if (!this.ipcRenderer || !command.trim()) return;
     
@@ -5366,9 +5363,6 @@ class FileManager {
     // 判断类型
     if (target.startsWith('http://') || target.startsWith('https://')) {
       type = 'url';
-    } else if (target.startsWith('es:') || target.startsWith('everything:')) {
-      target = target.replace(/^(es:|everything:)/, '').trim();
-      type = 'everything';
     } else if (target.endsWith('.exe') || target.endsWith('.cmd') || 
                target.endsWith('.bat') || target.endsWith('.lnk')) {
       type = 'file';
@@ -5395,26 +5389,6 @@ class FileManager {
       command: path,
       type: 'file'
     }).catch(err => console.error('Failed to open file:', err));
-  }
-  
-  async checkEverything() {
-    if (!this.ipcRenderer) return;
-    
-    try {
-      const result = await this.ipcRenderer.invoke('launchpad-check-everything');
-      this.launchpadState.everythingAvailable = result.available;
-      this.launchpadState.everythingSearchAvailable = result.searchAvailable;
-      this.launchpadState.everythingGuiAvailable = result.guiAvailable;
-      
-      if (!result.available) {
-        console.warn('Everything not available. 请在设置面板配置 Everything 路径');
-      } else {
-        console.log('Everything ready, search:', result.searchAvailable ? 'yes' : 'no', 
-                    'gui:', result.guiAvailable ? 'yes' : 'no');
-      }
-    } catch (err) {
-      console.error('Failed to check Everything:', err);
-    }
   }
   
   escapeHtml(str) {
@@ -5462,8 +5436,6 @@ class FileManager {
     this.settingDoubleClick = document.getElementById('setting-double-click');
     
     // 搜索设置
-    this.settingEverythingPath = document.getElementById('setting-everything-path');
-    this.settingEverythingEnabled = document.getElementById('setting-everything-enabled');
     this.settingAutoIndex = document.getElementById('setting-auto-index');
     this.settingSearchDepth = document.getElementById('setting-search-depth');
     this.settingSaveHistory = document.getElementById('setting-save-history');
@@ -5562,7 +5534,7 @@ class FileManager {
     
     // 开关类设置
     [this.settingConfirmDelete, this.settingShowHidden, this.settingDoubleClick,
-     this.settingEverythingEnabled, this.settingAutoIndex, this.settingSaveHistory].forEach(checkbox => {
+     this.settingAutoIndex, this.settingSaveHistory].forEach(checkbox => {
       checkbox?.addEventListener('change', () => {
         this.saveSettings();
       });
@@ -5573,11 +5545,6 @@ class FileManager {
       select?.addEventListener('change', () => {
         this.saveSettings();
       });
-    });
-    
-    // 输入框
-    this.settingEverythingPath?.addEventListener('change', () => {
-      this.saveSettings();
     });
     
     // 打开配置目录
@@ -5680,12 +5647,6 @@ class FileManager {
     }
     
     // 搜索设置
-    if (settings.everythingPath && this.settingEverythingPath) {
-      this.settingEverythingPath.value = settings.everythingPath;
-    }
-    if (settings.everythingEnabled !== undefined && this.settingEverythingEnabled) {
-      this.settingEverythingEnabled.checked = settings.everythingEnabled;
-    }
     if (settings.autoIndex !== undefined && this.settingAutoIndex) {
       this.settingAutoIndex.checked = settings.autoIndex;
     }
@@ -5721,8 +5682,6 @@ class FileManager {
       confirmDelete: this.settingConfirmDelete?.checked ?? true,
       showHidden: this.settingShowHidden?.checked ?? false,
       doubleClick: this.settingDoubleClick?.checked ?? true,
-      everythingPath: this.settingEverythingPath?.value || '',
-      everythingEnabled: this.settingEverythingEnabled?.checked ?? true,
       autoIndex: this.settingAutoIndex?.checked ?? true,
       searchDepth: parseInt(this.settingSearchDepth?.value) || 5,
       saveHistory: this.settingSaveHistory?.checked ?? true,
@@ -5781,8 +5740,6 @@ class FileManager {
       confirmDelete: true,
       showHidden: false,
       doubleClick: true,
-      everythingPath: '',
-      everythingEnabled: true,
       autoIndex: true,
       searchDepth: 5,
       saveHistory: true,

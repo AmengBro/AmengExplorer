@@ -57,6 +57,59 @@ ipcMain.on('amsys-get-path', (event, name) => {
   event.returnValue = resolveAmsysPath(name || 'amsys.exe');
 });
 
+// ========== PowerShell 路径解析（优先使用程序目录内置的便携版 pwsh7，兼容 Windows PE） ==========
+function resolvePowerShellPath() {
+  try {
+    const base = getAppBasePath();
+    const candidates = [
+      path.join(base, 'pwsh7', 'pwsh.exe'),
+      path.join(base, 'pwsh', 'pwsh.exe'),
+      path.join(base, 'pwsh.exe'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+  } catch (err) {
+    console.error('Failed to resolve pwsh path:', err);
+  }
+  // 兜底：PATH 中的 pwsh（不存在时由调用方降级为盘符扫描）
+  return 'pwsh';
+}
+
+ipcMain.on('pwsh-get-path', (event) => {
+  event.returnValue = resolvePowerShellPath();
+});
+
+// ========== 运行命令路径解析（修复启动台历史里的相对路径命令） ==========
+function resolveCommandPath(command) {
+  const trimmed = (command || '').trim();
+  if (!trimmed) return command;
+
+  const match = trimmed.match(/^("([^"]*)"|'([^']*)'|(\S+))/);
+  if (!match) return command;
+  const firstToken = match[2] || match[3] || match[4] || '';
+  const rest = trimmed.slice(match[0].length).trim();
+
+  // 1) amsys.exe：改写为配置/解包后的实际路径（settings.json 可覆盖）
+  if (path.basename(firstToken).toLowerCase() === 'amsys.exe') {
+    const amsysPath = resolveAmsysPath('amsys.exe');
+    if (amsysPath) {
+      const rewritten = `"${amsysPath}"` + (rest ? ' ' + rest : '');
+      return rewritten;
+    }
+  }
+
+  // 2) 相对路径：优先相对程序基础目录（exe 所在目录/项目根）解析
+  if (/^\.{1,2}[\\/]/.test(firstToken)) {
+    const abs = path.resolve(getAppBasePath(), firstToken);
+    if (fs.existsSync(abs)) {
+      return `"${abs}"` + (rest ? ' ' + rest : '');
+    }
+  }
+
+  return command;
+}
+
 // Worker 池：最多 4 个并发 worker
 const MAX_WORKERS = 4;
 const workerPool = [];
@@ -284,25 +337,6 @@ app.whenReady().then(() => {
   startBackgroundIndexBuild();
 });
 
-// ========== Everything Launchpad ==========
-
-function getEverythingConfig() {
-  try {
-    // config.ini 属于 amsys，应用自己的配置一律从 config/settings.json 读取
-    const settingsPath = getConfigPath(path.join('config', 'settings.json'));
-    if (fs.existsSync(settingsPath)) {
-      const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      return {
-        path: data.everythingPath || null,
-        enabled: data.everythingEnabled !== false
-      };
-    }
-  } catch (err) {
-    console.error('Failed to read settings.json:', err);
-  }
-  return { path: null, enabled: true };
-}
-
 // Global file search index (sigma-file-manager style)
 let fileIndex = null;
 let searchWorker = null;
@@ -362,31 +396,6 @@ function searchIndex(query, maxResults = 50) {
   results.sort((a, b) => b._score - a._score);
   
   return results.map(({ _score, ...rest }) => rest);
-}
-
-function resolveEverythingExecutables() {
-  const config = getEverythingConfig();
-  if (!config.path) return { searchExe: null, guiExe: null, dir: null };
-  
-  let guiExe = null;
-  let dir = null;
-  
-  if (fs.existsSync(config.path) && fs.statSync(config.path).isDirectory()) {
-    dir = config.path;
-    const guiCandidates = ['Everything64.exe', 'Everything.exe'];
-    for (const name of guiCandidates) {
-      const candidate = path.join(dir, name);
-      if (fs.existsSync(candidate)) {
-        guiExe = candidate;
-        break;
-      }
-    }
-  } else if (fs.existsSync(config.path) && fs.statSync(config.path).isFile()) {
-    guiExe = config.path;
-    dir = path.dirname(config.path);
-  }
-  
-  return { searchExe: null, guiExe, dir, enabled: config.enabled };
 }
 
 function buildFileIndex(forceRebuild = false) {
@@ -463,20 +472,6 @@ function buildFileIndex(forceRebuild = false) {
 function startBackgroundIndexBuild() {
   buildFileIndex().catch(() => {});
 }
-
-ipcMain.handle('launchpad-check-everything', async () => {
-  const { guiExe } = resolveEverythingExecutables();
-  return {
-    available: true,
-    searchAvailable: true,
-    guiAvailable: !!guiExe,
-    searchExe: null,
-    guiExe: guiExe,
-    indexBuilt: !!fileIndex,
-    indexEntryCount: fileIndex ? fileIndex.entryCount : 0,
-    indexBuilding: fileIndexBuilding
-  };
-});
 
 ipcMain.handle('launchpad-rebuild-index', async () => {
   fileIndex = null;
@@ -576,106 +571,6 @@ function quickFallbackSearch(query, maxResults = 50) {
   return results.slice(0, maxResults);
 }
 
-ipcMain.handle('launchpad-open-everything', async (event, { query, path: searchPath }) => {
-  const { guiExe } = resolveEverythingExecutables();
-  
-  if (!guiExe) {
-    return { success: false, error: '未找到 Everything.exe' };
-  }
-  
-  try {
-    const args = [];
-    if (searchPath) {
-      args.push('-parent', searchPath);
-    }
-    if (query) {
-      args.push('-s', query);
-    }
-    
-    spawn(guiExe, args, { detached: true, stdio: 'ignore' }).unref();
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
-function parseEverythingCSV(output) {
-  const lines = output.split(/\r?\n/).filter(line => line.trim());
-  const results = [];
-  
-  let startIndex = 0;
-  // Skip header row if present (Everything.exe -csv includes headers)
-  if (lines.length > 0) {
-    const firstFields = parseCSVLine(lines[0]);
-    if (firstFields.length >= 2 && 
-        (firstFields[0].toLowerCase().includes('path') || 
-         firstFields[0].toLowerCase().includes('full'))) {
-      startIndex = 1;
-    }
-  }
-  
-  for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    
-    const fields = parseCSVLine(line);
-    
-    if (fields.length >= 2) {
-      const fullPath = fields[0] || '';
-      const fileName = fields[1] || '';
-      const size = fields[2] || '0';
-      const dateModified = fields[3] || '';
-      
-      if (fullPath && fileName) {
-        const isDir = fullPath.endsWith('\\') || fullPath.endsWith('/') || 
-                      (fullPath === fileName && !fullPath.includes('.'));
-        results.push({
-          path: fullPath,
-          name: fileName,
-          size: size,
-          mtime: dateModified,
-          isDirectory: isDir
-        });
-      }
-    }
-  }
-  
-  return results;
-}
-
-function parseCSVLine(line) {
-  const fields = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    
-    if (inQuotes) {
-      if (char === '"' && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else if (char === '"') {
-        inQuotes = false;
-      } else {
-        current += char;
-      }
-    } else {
-      if (char === '"') {
-        inQuotes = true;
-      } else if (char === ',') {
-        fields.push(current.trim());
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-  }
-  
-  fields.push(current.trim());
-  return fields;
-}
-
 ipcMain.handle('launchpad-run', async (event, { command, type }) => {
   try {
     if (type === 'url') {
@@ -684,13 +579,6 @@ ipcMain.handle('launchpad-run', async (event, { command, type }) => {
     } else if (type === 'folder') {
       shell.showItemInFolder(command);
       return { success: true };
-    } else if (type === 'everything') {
-      const { guiExe } = resolveEverythingExecutables();
-      if (!guiExe) {
-        return { success: false, error: '未找到 Everything.exe' };
-      }
-      spawn(guiExe, ['-s', command], { detached: true, stdio: 'ignore' }).unref();
-      return { success: true };
     } else if (type === 'file') {
       shell.openPath(command);
       return { success: true };
@@ -698,7 +586,8 @@ ipcMain.handle('launchpad-run', async (event, { command, type }) => {
       // command 类型：使用 cmd /c start 模式启动（Windows 标准方式）
       // 等价于 system("start cmd")，确保 GUI 程序能在独立窗口中运行
       try {
-        const child = spawn('cmd', ['/c', 'start', '', command], {
+        const finalCommand = resolveCommandPath(command);
+        const child = spawn('cmd', ['/c', 'start', '', finalCommand], {
           detached: true,
           shell: false,
           windowsHide: false
@@ -837,9 +726,7 @@ const defaultSettings = {
   confirmDelete: true,
   showHidden: false,
   doubleClick: true,
-  everythingPath: '',
   amsysPath: '',
-  everythingEnabled: true,
   autoIndex: true,
   searchDepth: 5,
   saveHistory: true,

@@ -15,7 +15,7 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 
 | 文件 | 作用 |
 |------|------|
-| `src/index.js` | 主进程入口，IPC 处理、Everything 搜索索引、窗口管理 |
+| `src/index.js` | 主进程入口，IPC 处理、本地文件搜索索引、窗口管理 |
 | `src/js/app.js` | 渲染进程核心，UI 交互、文件操作、启动台搜索、设置面板 |
 | `src/js/search-index-worker.js` | Worker 线程，后台构建文件索引 |
 | `src/js/virtual-fs.js` | 虚拟文件系统层，回收站路径管理 |
@@ -23,22 +23,22 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 | `src/js/icons.js` | 图标渲染引擎 |
 | `src/css/style.css` | 全部样式 |
 | `src/index.html` | 主 HTML 结构 |
-| `config.ini` | 用户配置（Everything 路径等） |
+| `config.ini` | amsys 系统配置（虚拟根、挂载等；应用不读写） |
 | `config/icons.json` | 图标配置 |
 | `config/settings.json` | 设置存储（主题、视图、搜索等） |
 | `config/launchpad-history.json` | 启动台历史记录（搜索/运行历史） |
 
 ## IPC 事件
 
-### Everything 搜索
+### 本地索引搜索
 | 事件 | 方向 | 作用 |
 |------|------|------|
 | `launchpad-search` | renderer → main | 执行搜索 |
-| `launchpad-check-everything` | renderer → main | 检查搜索可用性 |
 | `launchpad-rebuild-index` | renderer → main | 手动重建索引 |
 | `launchpad-index-progress` | main → renderer | 索引构建进度 |
 | `launchpad-index-ready` | main → renderer | 索引构建完成 |
-| `launchpad-open-everything` | renderer → main | 打开 Everything GUI |
+
+另：`amsys-get-path`（同步）返回 amsys.exe 路径（settings.json 的 `amsysPath` 可配置）；`pwsh-get-path`（同步）返回 PowerShell 路径（优先程序目录内置 `pwsh7/pwsh.exe`，兼容 Windows PE）。
 
 ### 配置读写
 | 事件 | 方向 | 作用 |
@@ -70,7 +70,7 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 
 ### 标签页
 1. **通用**: 启动页面、默认视图、语言、删除确认、显示隐藏文件、双击打开
-2. **搜索**: Everything 路径、启用开关、自动索引、搜索深度、历史记录
+2. **搜索**: 自动索引、搜索深度、历史记录
 3. **外观**: 主题模式、强调色选择、字体大小
 4. **关于**: 应用信息、配置文件位置、检查更新、恢复默认设置
 
@@ -106,14 +106,16 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 
 ## 已修复的问题
 
-1. **Everything.exe ≠ es.exe**: 用户只有 GUI 版 Everything.exe，没有 es.exe CLI 工具
+1. **Everything 依赖已彻底移除**: 搜索完全基于本地文件索引 + PATH 快速扫描，不再依赖 Everything
 2. **搜索卡死**: 文件索引移到 Worker 线程，不阻塞主线程
-3. **输入框与按钮重叠**: 移除独立搜索/Everything 按钮，改用模式指示器
+3. **输入框与按钮重叠**: 移除独立搜索按钮，改用模式指示器
 4. **无搜索结果**: 实现本地文件索引 + PATH 快速扫描兜底
 5. **recentSearches/recentRuns 过长**: 改为并排布局 + 最大高度 + 手动清空
 6. **搜索历史冗余**: 防抖搜索不再记录历史，仅在用户主动提交时保存
 7. **回收站实现**: 从系统回收站改为程序内置虚拟根回收站（root 为 `<root>\root\Trash`，其他用户为 `<root>\home\<用户>\Trash`），支持恢复和永久删除
 8. **多选视觉反馈**: Ctrl+Click 多选时正确添加 `.selected` 类
+9. **wmic 依赖移除**: 磁盘枚举/容量改用程序目录内置便携版 pwsh7（`Get-CimInstance`），无 pwsh 时降级为盘符扫描，兼容 Windows PE
+10. **跨卷移动修复**: 删除到回收站/恢复/剪切粘贴跨盘符（EXDEV）时自动复制+删除兜底
 
 ## 开发约定
 
@@ -132,7 +134,7 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 
 ### 配置文件存储
 所有用户数据存储在基础路径下的 `config/` 目录：
-- `config.ini`: 系统配置（Everything 路径等）
+- `config.ini`: amsys 系统配置（应用不读写）
 - `config/icons.json`: 图标配置
 - `config/settings.json`: 应用设置
 - `config/launchpad-history.json`: 启动台历史记录

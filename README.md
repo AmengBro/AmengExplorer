@@ -261,7 +261,7 @@ AmengExplorer/
 - [虚拟文件系统架构详解](filesystem-architecture.md) — amsys 路径翻译、挂载体系、API 接口完整文档
 - [接口需求文档](want.md) — AmengExplorer 与 amsys 的接口设计规范
 - [管道通信协议](use-pipe.md) — amsys 进程通信格式说明
-- [启动台设计文档](docs/launchpad-plan.md) — Everything 集成的快速搜索与运行对话框方案
+- [启动台设计文档](docs/launchpad-plan.md) — 本地索引驱动的快速搜索与运行对话框方案
 - [自动文件夹大小方案](.trae/documents/auto-folder-size-plan.md) — 文件夹大小计算实现方案
 - [分栏视图方案](.trae/documents/column-view-plan.md) — 三栏分视图设计文档
 
