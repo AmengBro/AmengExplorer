@@ -108,6 +108,31 @@
   --warning: 43 70% 56%;
 }
 
+/* 浅色主题（data-theme="light"） */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --background: 0 0% 97%;
+  --background-2: 0 0% 95%;
+  --background-3: 0 0% 93%;
+  --window-toolbar: 0 0% 91%;
+  --icon: 220 10% 28%;
+
+  --foreground: 220 15% 12%;
+  --muted: 0 0% 92%;
+  --muted-foreground: 220 10% 38%;
+  --popover: 0 0% 97% / 80%;
+  --popover-foreground: 220 10% 28%;
+  --card: 0 0% 97% / 85%;
+  --card-foreground: 220 15% 14%;
+  --border: 0 0% 86%;
+  --input: 0 0% 90%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 90%;
+  --secondary-foreground: 220 10% 28%;
+  --ring: 216 12% 72%;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -749,9 +774,8 @@ svg {
   height: 100%;
 }
 
-/* 符号链接图标样式 - 添加小箭头指示器 */
-.file-item-icon.file-symlink::after,
-.file-item-icon.folder-symlink::after {
+/* 符号链接图标样式 - 添加小箭头指示器（仅文件符号链接，目录改用 Folder Link 图标） */
+.file-item-icon.file-symlink::after {
   content: '';
   position: absolute;
   bottom: 0;
@@ -763,14 +787,12 @@ svg {
   border-radius: 0 0 2px 0;
 }
 
-.file-item-icon.file-symlink,
-.file-item-icon.folder-symlink {
+.file-item-icon.file-symlink {
   position: relative;
 }
 
 /* 网格视图符号链接图标 */
-.grid-item-icon.file-symlink::after,
-.grid-item-icon.folder-symlink::after {
+.grid-item-icon.file-symlink::after {
   content: '';
   position: absolute;
   bottom: 0;
@@ -782,8 +804,7 @@ svg {
   border-radius: 0 0 3px 0;
 }
 
-.grid-item-icon.file-symlink,
-.grid-item-icon.folder-symlink {
+.grid-item-icon.file-symlink {
   position: relative;
 }
 
@@ -850,13 +871,6 @@ svg {
   border-radius: var(--radius-xs);
   padding: 2px 6px;
   margin: -2px -6px;
-}
-
-/* 符号链接大小显示样式 */
-.size-link {
-  color: hsl(var(--primary));
-  font-style: italic;
-  font-size: 11px;
 }
 
 .file-grid-view {
@@ -3306,6 +3320,56 @@ button svg,
 .setting-btn-secondary:hover {
   background-color: hsl(var(--foreground) / 5%);
   border-color: hsl(var(--primary) / 50%);
+}
+
+.setting-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-btn-secondary.is-confirming,
+.setting-btn-primary.is-confirming {
+  background-color: hsl(var(--destructive) / 20%);
+  border-color: hsl(var(--destructive));
+  color: hsl(var(--destructive));
+}
+
+.setting-btn-cancel {
+  flex-shrink: 0;
+}
+
+.setting-update-status {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+
+.setting-update-status.is-update {
+  color: hsl(var(--destructive));
+}
+
+.setting-update-download {
+  flex-shrink: 0;
+}
+
+.setting-home-bg-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-home-bg-control .setting-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-home-bg-control .setting-btn-secondary {
+  flex-shrink: 0;
 }
 
 .about-content {

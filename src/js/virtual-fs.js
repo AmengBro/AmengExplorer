@@ -11,7 +11,8 @@ class VirtualFileSystem {
     // 用户配置在 amsys 解析出虚拟根后加载（全部路径解析追随 amsys）
     this.userConfig = null;
     this.currentUser = 'root';
-    this.amsysClient = new AmsysClient(null);
+    // amsys 客户端在 init 中按解析出的路径（含外部 amsys）创建
+    this.amsysClient = null;
     this.root_ = '';
     this.mounts_ = {};
 
@@ -120,6 +121,9 @@ class VirtualFileSystem {
 
   async init() {
     try {
+      if (!this.amsysClient) {
+        this.amsysClient = new AmsysClient(await AmsysClient.resolvePath('amsys.exe'));
+      }
       if (!this.root_) {
         const result = await this.amsysClient.resolve('/');
         if (result.success && result.winPath) {
@@ -143,6 +147,13 @@ class VirtualFileSystem {
       this.initUserPaths();
     } catch (err) {
       console.error('VirtualFileSystem init error:', err);
+      if (!this.amsysClient) {
+        try {
+          this.amsysClient = new AmsysClient(null);
+        } catch (e2) {
+          console.error('VirtualFileSystem: failed to create amsys client:', e2);
+        }
+      }
       if (!this.root_) {
         this.root_ = require('os').homedir() + '\\AmengExplorerRoot';
       }

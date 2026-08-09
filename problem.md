@@ -19,7 +19,10 @@
 - [x] **P0 `config.ini` 的 root 是开发机绝对路径**：已改为相对路径 `root = ./root`，并在 `amsys-client.js` spawn 时固定 `cwd` 为 amsys.exe 所在目录（amsys 的相对 root 是相对进程工作目录解析的），`virtual-fs` 再把 amsys 返回的路径归一化为绝对路径。
 - [x] **P1 应用不再读写 config.ini**：`config.ini` 属于 amsys，Electron 应用已彻底移除对其的读写（虚拟根由 amsys `resolve /` 获取，用户配置从虚拟根 `etc/users.toml` 读取）。
 - [x] **P1 `root/` 虚拟根数据随包分发**：`root/**` 加入 asar 解包，打包后 `app.asar.unpacked/root` 包含 `etc/users.toml`、`etc/fstab` 等文件；空目录骨架由应用启动时自动重建，不再落到用户主目录。
-- [x] **P1 amsys.exe 位置不可动态配置**：已新增配置项 `config/settings.json` 的 `amsysPath`（可指向 amsys.exe 或所在目录）；主进程通过 `amsys-get-path` IPC 解析，优先级：显式配置 > 打包 `app.asar.unpacked` > 开发项目根。
+- [x] **P1 amsys.exe 位置不可动态配置**：已支持多级动态解析（`amsys-get-path-async`）：`config/settings.json` 的 `amsysPath` > 内嵌 amsys 的 `config.ini` 中 `amsys=` 外部路径（绝对路径，或 `/bin/com.amsys.app` 类 Unix 路径由内嵌 amsys `resolve` 翻译）> 内嵌 amsys（打包 `app.asar.unpacked` / 开发项目根）。
+- [x] **检查更新实现**：主进程 `check-updates` IPC 调用 GitHub Releases API（`/repos/AmengBro/AmengExplorer/releases/latest`）获取 `tag_name`，与 `app.getVersion()` 做 semver 比较；渲染进程内联显示“已是最新版本”/“检查到新版本”+“前往下载”（`shell.openExternal` 跳 release 页），无弹窗、无数据库。
+- [x] **图标映射重构**：`config/icons.json` 重构为 `_types` 扩展名表（扩展名 → Fluent 图标名，可直接匹配 `@fluentui/svg-icons`），`getFileIcon` 由 60 行 if 链改为查表；符号链接目录用 `folder_link` 图标并移除右下角三角标，归档文件（zip/rar/7z/tar/gz 等）用 `folder_zip`；按指定映射替换 pdf/ppt/xls/doc/css/js/dll/sys/cer/ini/msc/toml 等图标。
+- [x] **符号链接目录大小查询**：列表/分栏/网格视图的符号链接目录不再显示“→ 链接”，与普通目录一样显示“查看”按钮并支持大小计算（Windows 下 junction/符号链接对 fs 遍历透明）。
 - [x] **P2 用户配置不再做应用侧路径解析**：`user-config.js` 已删除 `resolveAppRoot()\root` 默认值，虚拟根完全以 amsys `resolve /` 的结果为准（`UserConfig` 构造函数必须显式传入 amsys 解析出的根路径）。
 - [x] **P2 Everything 依赖已彻底移除**：`launchpad-check-everything` / `launchpad-open-everything` / `resolveEverythingExecutables` / `parseEverythingCSV`、设置项 `everythingPath` / `everythingEnabled` 及设置面板 UI 全部删除，搜索仅依赖本地文件索引 + PATH 扫描。
 - [x] **P2 跨卷移动失败已修复**：删除到回收站 / 恢复 / 剪切粘贴统一走 `movePathWithFallback()`，`renameSync` 抛 EXDEV 时自动 `cpSync` + 删除兜底。
@@ -28,3 +31,8 @@
 - [x] **P3 ignore 规则留下空壳目录**：评估后决定不修——空目录不影响功能与包体积。
 - [x] **P3 启动台历史含相对路径命令**：`launchpad-run` 的 command 分支新增 `resolveCommandPath()`：首 token 为 `amsys.exe` 时改写为实际路径（settings.json `amsysPath` / 解包目录），其余 `./`、`..\` 相对路径按程序基础目录（exe 所在目录/项目根）解析，`>./amsys.exe --user AmengBro` 这类历史命令打包后也可执行。
 - [x] **P3 `forge.config.js` 的 `cacheRoot` 为开发机绝对路径**：评估后决定不修——仅打包期 Electron 下载缓存，不影响运行时。
+- [x] **P0 打包后所有图标显示 undefined**：打包版 exe 旁没有 `config/`，而主进程配置读写统一走 exe 旁（`getConfigPath`），`config-sync-read-icons` 返回空对象导致图标映射为空。已新增 `ensureDefaultConfigFiles()`：首次运行时把 `app.asar` 内的 `config/icons.json`、`settings.json`、`launchpad-history.json` 复制到 exe 旁 `config/`（便携版可写），并在 `createWindow` 前执行；已用 Electron headless 实测 asar 内读取与复制链路。
+- [x] **设置功能落实（修正版）**：启动页（home/桌面/文档/上次目录）、删除确认开关、隐藏文件过滤、单击打开、保存历史开关、自动索引、搜索深度（传入索引 worker）全部接入运行时。
+- [x] **深浅色主题实现**：新增 `:root[data-theme="light"]` 变量覆盖（背景/前景/边框/次要色等），`applyTheme` 支持 dark/light/system。
+- [x] **强调色修正**：`applyAccentColor` 设置 `--primary`（连同 `--accent`），作用于“查看”按钮、设置菜单等原本固定为蓝色的元素，而不是只改文本/背景色调。
+- [x] **主页横幅可配置**：新增 `homeBanner` 设置（默认 Trae 生成的网络图片 URL，即主页顶栏正下方/快速访问上方的 banner），外观页可修改 URL 实时生效。

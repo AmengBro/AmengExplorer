@@ -2,14 +2,15 @@
   "startPage": "home",
   "defaultView": "list",
   "language": "zh-CN",
-  "confirmDelete": false,
-  "showHidden": true,
+  "confirmDelete": true,
+  "showHidden": false,
   "doubleClick": true,
   "amsysPath": "",
+  "homeBanner": "./banner-difcult.png",
   "autoIndex": true,
   "searchDepth": 5,
   "saveHistory": true,
   "theme": "dark",
-  "accentColor": "orange",
-  "fontSize": 13
+  "accentColor": "blue",
+  "lastDirectory": "/"
 }

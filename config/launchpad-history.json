@@ -1,12 +1,4 @@
 {
-  "searches": [
-    "cmd",
-    "我的"
-  ],
-  "runs": [
-    ">pwsh",
-    ">./amsys.exe --user AmengBro",
-    ">./amsys",
-    ">cmd"
-  ]
+  "searches": [],
+  "runs": []
 }

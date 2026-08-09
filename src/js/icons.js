@@ -45,16 +45,25 @@ function loadIcon(name, size = 24, style = 'filled') {
 function buildIconMap(config) {
   const result = {};
   const defaults = config._defaults || { size: 24, style: 'filled' };
+  const load = (name) => loadIcon(name, defaults.size, defaults.style);
+
+  // 文件类型映射：扩展名 → Fluent 图标名（config/icons.json 的 _types）
+  if (config._types && typeof config._types === 'object') {
+    result.types = {};
+    for (const [ext, iconName] of Object.entries(config._types)) {
+      result.types[ext] = load(iconName);
+    }
+  }
 
   for (const [key, value] of Object.entries(config)) {
     if (key.startsWith('_')) continue;
     if (key === 'contextMenu') {
       result.contextMenu = {};
       for (const [ck, cv] of Object.entries(value)) {
-        result.contextMenu[ck] = loadIcon(cv, defaults.size, defaults.style);
+        result.contextMenu[ck] = load(cv);
       }
     } else {
-      result[key] = loadIcon(value, defaults.size, defaults.style);
+      result[key] = load(value);
     }
   }
   return result;

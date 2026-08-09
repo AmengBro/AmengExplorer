@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { exec, spawn } = require('child_process');
+const { createAmsysResolver } = require('./js/amsys-resolver');
 
 // ========== 配置路径（支持便携版） ==========
 // 便携版：打包后配置文件存储在 exe 所在目录
@@ -20,41 +21,99 @@ function getConfigPath(fileName) {
   return path.join(getAppBasePath(), fileName);
 }
 
-// ========== amsys 路径解析（支持 settings.json 动态配置） ==========
-function resolveAmsysPath(name) {
+const amsysResolver = createAmsysResolver({
+  settingsPath: () => getConfigPath(path.join('config', 'settings.json')),
+  embeddedDir: () => app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : app.getAppPath()
+});
+
+// 读取应用设置（settings.json），缺失字段用默认值
+function readAppSettings() {
   try {
-    // 1) settings.json 显式配置：可指向 amsys.exe 或所在目录
     const settingsPath = getConfigPath(path.join('config', 'settings.json'));
     if (fs.existsSync(settingsPath)) {
       const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      if (data.amsysPath) {
-        const configured = data.amsysPath;
-        if (fs.existsSync(configured)) {
-          if (fs.statSync(configured).isDirectory()) {
-            const inDir = path.join(configured, name);
-            if (fs.existsSync(inDir)) return inDir;
-          } else if (name === 'amsys.exe') {
-            return configured;
-          }
-        }
-      }
+      return { ...defaultSettings, ...data };
     }
-    // 2) 打包模式：app.asar.unpacked
-    if (app.isPackaged) {
-      const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', name);
-      if (fs.existsSync(unpackedPath)) return unpackedPath;
-    }
-    // 3) 开发模式：项目根
-    const devPath = path.join(app.getAppPath(), name);
-    if (fs.existsSync(devPath)) return devPath;
   } catch (err) {
-    console.error('Failed to resolve amsys path:', err);
+    console.error('Failed to read settings.json:', err);
   }
-  return null;
+  return { ...defaultSettings };
 }
 
+// ========== 首次运行：把 asar 内的默认配置复制到程序目录（便携版可写） ==========
+// 打包后 config/ 在 app.asar 内部，而配置读写统一走 exe 旁 config/；
+// 不预置的话图标配置读不到，会导致打包版所有图标显示 undefined。
+function ensureDefaultConfigFiles() {
+  try {
+    const configDir = getConfigPath('config');
+    fs.mkdirSync(configDir, { recursive: true });
+
+    const files = ['icons.json', 'settings.json', 'launchpad-history.json'];
+    for (const file of files) {
+      const target = path.join(configDir, file);
+      if (fs.existsSync(target)) continue;
+
+      // 默认配置位于 app.asar 内（开发模式项目 config/ 已在 exe 旁，直接跳过）
+      const asarSource = path.join(process.resourcesPath || '', 'app.asar', 'config', file);
+      if (fs.existsSync(asarSource)) {
+        fs.copyFileSync(asarSource, target);
+        console.log(`Seeded default config: ${target}`);
+      }
+    }
+
+  } catch (err) {
+    console.error('Failed to seed default config:', err);
+  }
+}
+
+// 同步接口（旧/兜底）：仅支持配置与内嵌路径；外部 amsys 解析走异步接口
 ipcMain.on('amsys-get-path', (event, name) => {
-  event.returnValue = resolveAmsysPath(name || 'amsys.exe');
+  const n = name || 'amsys.exe';
+  event.returnValue = amsysResolver.resolveConfiguredAmsysPath(n) || amsysResolver.resolveEmbeddedAmsysPath(n);
+});
+
+ipcMain.handle('amsys-get-path-async', async (event, name) => {
+  return amsysResolver.resolveAmsysPathAsync(name || 'amsys.exe');
+});
+
+// ========== 检查更新（GitHub Releases，无需数据库） ==========
+function compareVersions(a, b) {
+  const pa = String(a || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+ipcMain.handle('check-updates', async () => {
+  try {
+    const res = await fetch('https://api.github.com/repos/AmengBro/AmengExplorer/releases/latest');
+    if (!res.ok) {
+      // 404 = 暂无 release（或仓库无公开发布），视为已是最新
+      if (res.status === 404) {
+        return { hasUpdate: false, latestVersion: null, currentVersion: app.getVersion(), url: null };
+      }
+      return { hasUpdate: false, error: `HTTP ${res.status}` };
+    }
+    const data = await res.json();
+    const latest = String(data.tag_name || '').replace(/^v/i, '');
+    const current = app.getVersion();
+    const hasUpdate = latest ? compareVersions(latest, current) > 0 : false;
+    return {
+      hasUpdate,
+      latestVersion: latest || null,
+      currentVersion: current,
+      url: data.html_url || null
+    };
+  } catch (err) {
+    return { hasUpdate: false, error: err.message };
+  }
 });
 
 // ========== PowerShell 路径解析（优先使用程序目录内置的便携版 pwsh7，兼容 Windows PE） ==========
@@ -325,6 +384,9 @@ ipcMain.handle('calc-size-resume', async (event, { taskId }) => {
 });
 
 app.whenReady().then(() => {
+  // 先把默认配置落盘到 exe 旁，渲染进程同步读图标配置时才能拿到
+  ensureDefaultConfigFiles();
+
   createWindow();
 
   app.on('activate', () => {
@@ -464,12 +526,14 @@ function buildFileIndex(forceRebuild = false) {
       searchWorker = null;
     });
     
-    searchWorker.postMessage({ type: 'build-index' });
+    searchWorker.postMessage({ type: 'build-index', depth: readAppSettings().searchDepth || 5 });
   });
 }
 
 // Start building index in background when app is ready
 function startBackgroundIndexBuild() {
+  const settings = readAppSettings();
+  if (settings.autoIndex === false) return;
   buildFileIndex().catch(() => {});
 }
 
@@ -727,12 +791,12 @@ const defaultSettings = {
   showHidden: false,
   doubleClick: true,
   amsysPath: '',
+  homeBanner: './banner-difcult.png',
   autoIndex: true,
   searchDepth: 5,
   saveHistory: true,
   theme: 'dark',
-  accentColor: 'blue',
-  fontSize: 14
+  accentColor: 'blue'
 };
 
 ipcMain.handle('config-read-settings', async () => {

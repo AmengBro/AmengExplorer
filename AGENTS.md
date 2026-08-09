@@ -38,7 +38,7 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 | `launchpad-index-progress` | main → renderer | 索引构建进度 |
 | `launchpad-index-ready` | main → renderer | 索引构建完成 |
 
-另：`amsys-get-path`（同步）返回 amsys.exe 路径（settings.json 的 `amsysPath` 可配置）；`pwsh-get-path`（同步）返回 PowerShell 路径（优先程序目录内置 `pwsh7/pwsh.exe`，兼容 Windows PE）。
+另：`amsys-get-path`（同步，兜底）/ `amsys-get-path-async`（异步，完整链）返回 amsys.exe 路径，优先级：settings.json 的 `amsysPath` > 内嵌 amsys 的 config.ini 中 `amsys=` 指向的外部 amsys（如 `/bin/com.amsys.app`，由内嵌 amsys 解析）> 内嵌 amsys；`check-updates`（异步）从 GitHub Releases API 检查最新版本；`pwsh-get-path`（同步）返回 PowerShell 路径（优先程序目录内置 `pwsh7/pwsh.exe`，兼容 Windows PE）。
 
 ### 配置读写
 | 事件 | 方向 | 作用 |
@@ -71,7 +71,7 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 ### 标签页
 1. **通用**: 启动页面、默认视图、语言、删除确认、显示隐藏文件、双击打开
 2. **搜索**: 自动索引、搜索深度、历史记录
-3. **外观**: 主题模式、强调色选择、字体大小
+3. **外观**: 主题模式（深浅色）、强调色选择（作用于“查看”/设置菜单等固定蓝色元素）、主页横幅图片 URL（默认 Trae 生成图）
 4. **关于**: 应用信息、配置文件位置、检查更新、恢复默认设置
 
 ## 启动台交互
@@ -116,6 +116,11 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 8. **多选视觉反馈**: Ctrl+Click 多选时正确添加 `.selected` 类
 9. **wmic 依赖移除**: 磁盘枚举/容量改用程序目录内置便携版 pwsh7（`Get-CimInstance`），无 pwsh 时降级为盘符扫描，兼容 Windows PE
 10. **跨卷移动修复**: 删除到回收站/恢复/剪切粘贴跨盘符（EXDEV）时自动复制+删除兜底
+11. **设置功能落实**: 启动页/删除确认/隐藏文件/单击打开/保存历史/自动索引/搜索深度均接入运行时行为；深浅色主题（data-theme="light" 变量覆盖）；主页横幅图片可配置
+12. **检查更新**: 通过 GitHub Releases API（`releases/latest`）读取最新版本号与本地 semver 对比，无需数据库；有新版时按钮右侧显示“检查到新版本”+“前往下载”（跳转 release 页面）
+13. **外部 amsys 动态解析**: 内嵌 amsys 旁的 config.ini 可配置 `amsys=`（绝对路径或类 Unix 路径如 `/bin/com.amsys.app`），程序通过内嵌 amsys 解析后调用外部 amsys
+14. **图标映射重构**: `config/icons.json` 改为 `_types` 扩展名表（扩展名 → Fluent 图标名，值直接匹配图标库），`getFileIcon` 直接查表；符号链接目录用 Folder Link 图标（去掉三角标）、归档文件用 Folder Zip
+15. **符号链接目录大小查询**: 列表/分栏/网格视图对符号链接目录不再显示“→ 链接”，改为与普通目录一致显示“查看”并支持大小计算
 
 ## 开发约定
 

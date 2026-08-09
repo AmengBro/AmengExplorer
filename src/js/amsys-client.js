@@ -4,30 +4,33 @@ const fs = require('fs');
 
 const REQUEST_TIMEOUT_MS = 5000; // 5秒超时
 
-function resolveExecutable(name) {
-    // 1) 优先使用主进程解析的路径（支持 settings.json 的 amsysPath 动态配置）
-    try {
-        const electron = require('electron');
-        if (electron && electron.ipcRenderer) {
-            const configured = electron.ipcRenderer.sendSync('amsys-get-path', name);
-            if (configured && fs.existsSync(configured)) return configured;
-        }
-    } catch (e) {
-    }
-    // 2) 打包模式：app.asar.unpacked
+// 本地兜底：打包模式 app.asar.unpacked / 开发模式项目根
+function resolveLocalExecutable(name) {
     if (__dirname.includes('app.asar')) {
         const unpackedDir = path.join(__dirname.split('app.asar')[0], 'app.asar.unpacked');
         const exePath = path.join(unpackedDir, name);
         if (fs.existsSync(exePath)) return exePath;
     }
-    // 3) 开发模式：项目根
     return path.join(__dirname, '..', '..', name);
+}
+
+// 异步解析：优先主进程完整链（settings.json → config.ini 外部 amsys → 内嵌）
+async function resolveExecutablePath(name) {
+    try {
+        const electron = require('electron');
+        if (electron && electron.ipcRenderer) {
+            const configured = await electron.ipcRenderer.invoke('amsys-get-path-async', name);
+            if (configured && fs.existsSync(configured)) return configured;
+        }
+    } catch (e) {
+    }
+    return resolveLocalExecutable(name);
 }
 
 class AmsysClient {
     constructor(amsysPath = null) {
         if (!amsysPath) {
-            amsysPath = resolveExecutable('amsys.exe');
+            amsysPath = resolveLocalExecutable('amsys.exe');
         }
         this.amsysPath = amsysPath;
         this.execDir = path.dirname(amsysPath);
@@ -37,6 +40,10 @@ class AmsysClient {
         this.queue = [];
         this.buffer = Buffer.alloc(0);
         this.init();
+    }
+
+    static async resolvePath(name) {
+        return resolveExecutablePath(name || 'amsys.exe');
     }
 
     init() {

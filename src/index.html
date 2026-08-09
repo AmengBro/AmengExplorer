@@ -52,7 +52,7 @@
           <div class="progressive-blur__layer" style="--progressive-blur-amount: 8px; --progressive-blur-start: 30%; --progressive-blur-end: 75%;"></div>
           <div class="progressive-blur__layer" style="--progressive-blur-amount: 16px; --progressive-blur-start: 45%; --progressive-blur-end: 100%;"></div>
         </div>
-        
+
         <div class="window-toolbar-action-layer">
           <div class="window-toolbar-row">
             <div class="window-toolbar-left">
@@ -113,8 +113,8 @@
             <div class="home-page" id="home-page">
             <div class="home-banner">
               <div class="home-banner__media-container">
-                <img src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=beautiful%20landscape%20sunset%20mountains%20forest%20purple%20sky%20artistic%20wallpaper&image_size=landscape_16_9" 
-                     class="home-banner__media" alt="Home Banner">
+                <img src=".\banner-difcult.png"
+                     class="home-banner__media" id="home-banner-media" alt="Home Banner">
               </div>
               <div class="home-banner__overlay home-banner__overlay--top"></div>
               <div class="home-banner__overlay home-banner__overlay--bottom"></div>
@@ -481,7 +481,7 @@
       </div>
     </div>
 
-    
+
 
     <div class="dialog-overlay" id="dialog-overlay"></div>
     <div class="dialog" id="dialog">
@@ -692,7 +692,10 @@
                 </label>
               </div>
               <div class="setting-row">
-                <button class="setting-btn-secondary" id="setting-clear-history">清空历史记录</button>
+                <div class="setting-btn-group">
+                  <button class="setting-btn-secondary" id="setting-clear-history">清空历史记录</button>
+                  <button class="setting-btn-secondary setting-btn-cancel is-hidden" id="setting-clear-history-cancel">取消</button>
+                </div>
               </div>
             </div>
           </div>
@@ -726,14 +729,17 @@
               </div>
             </div>
             <div class="settings-section">
-              <h3 class="settings-section-title">字体</h3>
+              <h3 class="settings-section-title">主页横幅</h3>
               <div class="setting-row">
                 <div class="setting-info">
-                  <span class="setting-label">字体大小</span>
-                  <span class="setting-desc">界面文字的显示大小</span>
+                  <span class="setting-label">横幅图片 URL</span>
+                  <span class="setting-desc">主页顶栏下方横幅图片，可填网络地址或选择本地图片</span>
                 </div>
-                <input type="range" class="setting-range" id="setting-font-size" min="12" max="18" value="14">
-                <span class="setting-range-value" id="setting-font-size-value">14</span>
+                <div class="setting-home-bg-control">
+                  <input type="text" class="setting-input" id="setting-home-banner" placeholder="https://... 或本地图片路径">
+                  <button class="setting-btn-secondary" id="setting-home-banner-pick">选择…</button>
+                  <input type="file" id="setting-home-banner-file" accept="image/*" hidden>
+                </div>
               </div>
             </div>
           </div>
@@ -772,10 +778,17 @@
             <div class="settings-section">
               <h3 class="settings-section-title">操作</h3>
               <div class="setting-row">
-                <button class="setting-btn-primary" id="setting-check-update">检查更新</button>
+                <div class="setting-btn-group">
+                  <button class="setting-btn-primary" id="setting-check-update">检查更新</button>
+                  <span class="setting-update-status" id="setting-update-status"></span>
+                  <button class="setting-btn-secondary setting-update-download is-hidden" id="setting-update-download">前往下载</button>
+                </div>
               </div>
               <div class="setting-row">
-                <button class="setting-btn-secondary" id="setting-reset-settings">恢复默认设置</button>
+                <div class="setting-btn-group">
+                  <button class="setting-btn-secondary" id="setting-reset-settings">恢复默认设置</button>
+                  <button class="setting-btn-secondary setting-btn-cancel is-hidden" id="setting-reset-settings-cancel">取消</button>
+                </div>
               </div>
             </div>
           </div>

@@ -18,12 +18,13 @@ const BATCH_SIZE = 2000;
 if (parentPort) {
   parentPort.on('message', (msg) => {
     if (msg.type === 'build-index') {
-      buildIndex(msg.drives || null);
+      buildIndex(msg.drives || null, msg.depth);
     }
   });
 }
 
-function buildIndex(customDrives) {
+function buildIndex(customDrives, depth) {
+  const maxDepth = depth || SEARCH_DEPTH;
   const entries = [];
   const seenPaths = new Set();
   let scanned = 0;
@@ -33,7 +34,7 @@ function buildIndex(customDrives) {
   const drives = customDrives || getDriveRoots();
 
   function scanDirectory(dir, depth) {
-    if (depth > SEARCH_DEPTH) return;
+    if (depth > maxDepth) return;
     if (entries.length >= MAX_ENTRIES) return;
 
     let files;

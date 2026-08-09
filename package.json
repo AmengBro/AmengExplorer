@@ -1,7 +1,7 @@
 {
   "name": "AmengExplorer",
   "productName": "AmengExplorer",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "在windows上体验linux的文件管理",
   "main": "src/index.js",
   "private": true,

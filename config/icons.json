@@ -1,6 +1,5 @@
 {
-  "_comment": "AmengExplorer 图标配置 - 修改 icon 名称即可更换对应位置的图标。所有图标来自 @fluentui/svg-icons 库。",
-  "_usage": "键名对应代码中的引用位置，值为 Fluent 图标名（不含 _24_filled 后缀）。可查询 https://fluenticons.io 获取所有可用图标名。",
+  "_comment": "AmengExplorer 图标配置。UI 图标键直接对应代码引用位置；文件类型图标统一放在 _types（扩展名 -> Fluent 图标名，不含 _24_filled 后缀），值可直接匹配 @fluentui/svg-icons 库。",
   "_defaults": {
     "size": 24,
     "style": "filled"
@@ -8,54 +7,9 @@
 
   "folder": "folder",
   "folderOpen": "folder_open",
+  "folderLink": "folder_link",
+  "folderZip": "folder_zip",
   "file": "document",
-
-  "filePdf": "document_pdf",
-  "fileWord": "document_word",
-  "fileExcel": "document_table",
-  "filePpt": "document_bullet_list",
-  "fileTxt": "document_text",
-  "fileMarkdown": "document_text",
-  "fileCsv": "document_csv",
-  "fileRtf": "document",
-
-  "fileCode": "code",
-  "fileJs": "document_javascript",
-  "fileCss": "document_css",
-  "fileHtml": "code",
-  "filePython": "code_block",
-  "fileJson": "document_data",
-  "fileXml": "document_data",
-  "fileTs": "document_javascript",
-  "fileCpp": "code_block",
-  "fileJava": "code_block",
-  "fileCs": "code_block",
-  "fileGo": "code_block",
-  "fileRust": "code_block",
-  "filePhp": "code_block",
-  "fileSql": "database",
-  "fileBash": "prompt",
-
-  "fileImage": "image",
-  "fileSvg": "image_edit",
-  "fileIcon": "image",
-  "fileVideo": "video",
-  "fileAudio": "speaker_2",
-  "fileArchive": "archive",
-
-  "fileExe": "window_apps",
-  "fileDll": "window_apps",
-  "fileBat": "prompt",
-  "fileCmd": "prompt",
-  "fileSys": "shield",
-  "fileReg": "settings",
-  "fileLnk": "link",
-
-  "fileDatabase": "database",
-  "fileConfig": "settings",
-  "fileFont": "text_font",
-  "fileCertificate": "certificate",
-  "fileWeb": "globe",
 
   "device": "hard_drive",
   "disk": "hard_drive",
@@ -111,7 +65,7 @@
   "delete": "delete",
   "settings": "settings",
   "undo": "arrow_undo",
-  "bolt": "bolt",
+  "bolt": "flash",
   "clock": "clock",
 
   "contextMenu": {
@@ -123,5 +77,133 @@
     "rename": "edit",
     "delete": "delete",
     "properties": "info"
+  },
+
+  "_types": {
+    "default": "document",
+
+    "pdf": "document_pdf",
+    "doc": "document_bullet_list",
+    "docx": "document_bullet_list",
+    "xls": "document_table",
+    "xlsx": "document_table",
+    "xlsm": "document_table",
+    "ppt": "projection_screen",
+    "pptx": "projection_screen",
+    "txt": "document_text",
+    "log": "document_text",
+    "rtf": "document_text",
+    "md": "document_text",
+    "markdown": "document_text",
+
+    "css": "document_css",
+    "js": "document_javascript",
+    "mjs": "document_javascript",
+    "cjs": "document_javascript",
+    "json": "document_javascript",
+    "ts": "document_javascript",
+    "tsx": "document_javascript",
+
+    "url": "document_link",
+    "lnk": "document_link",
+    "webloc": "document_link",
+
+    "dll": "document_briefcase",
+    "sys": "document_briefcase",
+    "so": "document_briefcase",
+    "dylib": "document_briefcase",
+
+    "cer": "document_ribbon",
+    "crt": "document_ribbon",
+    "p12": "document_ribbon",
+    "pfx": "document_ribbon",
+    "pem": "document_ribbon",
+    "key": "document_ribbon",
+
+    "msc": "document_toolbox",
+
+    "ini": "document_endnote",
+    "cfg": "document_endnote",
+    "conf": "document_endnote",
+
+    "toml": "code",
+    "yaml": "code",
+    "yml": "code",
+    "html": "code",
+    "htm": "code",
+    "vue": "code",
+    "svelte": "code",
+
+    "py": "code_block",
+    "cpp": "code_block",
+    "c": "code_block",
+    "h": "code_block",
+    "java": "code_block",
+    "cs": "code_block",
+    "go": "code_block",
+    "rs": "code_block",
+    "php": "code_block",
+
+    "sql": "database",
+    "db": "database",
+    "sqlite": "database",
+
+    "sh": "prompt",
+    "bash": "prompt",
+    "bat": "prompt",
+    "cmd": "prompt",
+    "ps1": "prompt",
+
+    "csv": "document_csv",
+    "tsv": "document_csv",
+    "xml": "document_data",
+    "xsl": "document_data",
+
+    "png": "image",
+    "jpg": "image",
+    "jpeg": "image",
+    "gif": "image",
+    "bmp": "image",
+    "webp": "image",
+    "ico": "image",
+    "tiff": "image",
+    "svg": "image_edit",
+
+    "mp3": "speaker_2",
+    "wav": "speaker_2",
+    "flac": "speaker_2",
+    "aac": "speaker_2",
+    "ogg": "speaker_2",
+
+    "mp4": "video",
+    "mkv": "video",
+    "avi": "video",
+    "mov": "video",
+    "webm": "video",
+    "wmv": "video",
+
+    "zip": "folder_zip",
+    "rar": "folder_zip",
+    "7z": "folder_zip",
+    "tar": "folder_zip",
+    "gz": "folder_zip",
+    "bz2": "folder_zip",
+    "xz": "folder_zip",
+    "zst": "folder_zip",
+    "iso": "folder_zip",
+
+    "exe": "window_apps",
+    "msi": "window_apps",
+    "com": "window_apps",
+    "reg": "settings",
+
+    "ttf": "text_font",
+    "otf": "text_font",
+    "woff": "text_font",
+    "woff2": "text_font",
+
+    "tmp": "document",
+    "temp": "document",
+    "bak": "document"
   }
 }
