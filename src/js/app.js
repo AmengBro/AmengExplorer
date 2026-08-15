@@ -48,6 +48,7 @@ class FileManager {
     try { this.initFilterPanel(); } catch(e) { console.error('initFilterPanel failed:', e); }
     try { this.initLaunchpad(); } catch(e) { console.error('initLaunchpad failed:', e); }
     try { this.initSettings(); } catch(e) { console.error('initSettings failed:', e); }
+    try { this.initVolumeLabels(); } catch(e) { console.error('initVolumeLabels failed:', e); }
 
     this.hideLoadingScreen();
 
@@ -2240,13 +2241,16 @@ class FileManager {
           const driveCard = document.createElement('div');
           driveCard.className = 'drive-card';
           driveCard.dataset.path = '/media/' + entry.name;
+          const letter = entry.name.toUpperCase();
+          const label = (this._driveLabels || {})[letter];
+          const driveName = label ? `${label} (${letter}:)` : `${letter} 盘`;
           driveCard.innerHTML = `
             <div class="drive-card__header">
               <div class="drive-card__icon">
                 ${this.icons.disk}
               </div>
               <div class="drive-card__info">
-                <div class="drive-card__name">${entry.name.toUpperCase()} 盘</div>
+                <div class="drive-card__name">${driveName}</div>
                 <div class="drive-card__path">/media/${entry.name}</div>
               </div>
             </div>
@@ -5887,6 +5891,139 @@ class FileManager {
     this.ipcRenderer.invoke('launchpad-rebuild-index').catch(() => {});
   }
 
+  // ========== 修改卷标（主菜单“驱动器”右侧铅笔按钮） ==========
+  initVolumeLabels() {
+    this.volumeLabelOverlay = document.getElementById('volume-label-overlay');
+    this.volumeLabelList = document.getElementById('volume-label-list');
+    this.volumeLabelClose = document.getElementById('volume-label-close');
+    this.volumeLabelCancel = document.getElementById('volume-label-cancel');
+    this.volumeLabelSave = document.getElementById('volume-label-save');
+    this.drivesLabelBtn = document.getElementById('drives-label-btn');
+    this._volumeLabelsOriginal = [];
+    // 卷标预处理缓存：盘符 -> 卷标，供主页卡片/侧栏统一使用
+    this._driveLabels = {};
+
+    this.drivesLabelBtn?.addEventListener('click', () => this.openVolumeLabelModal());
+    this.volumeLabelClose?.addEventListener('click', () => this.closeVolumeLabelModal());
+    this.volumeLabelCancel?.addEventListener('click', () => this.closeVolumeLabelModal());
+    this.volumeLabelSave?.addEventListener('click', () => this.saveVolumeLabels());
+    this.volumeLabelOverlay?.addEventListener('click', (e) => {
+      if (e.target === this.volumeLabelOverlay) this.closeVolumeLabelModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.volumeLabelOverlay && !this.volumeLabelOverlay.classList.contains('is-hidden')) {
+        this.closeVolumeLabelModal();
+      }
+    });
+
+    // 预处理：启动即拉取卷标并缓存，完成后刷新显示
+    this.refreshDriveLabels();
+  }
+
+  // 拉取所有已挂载磁盘的卷标并缓存；完成后刷新主页驱动器卡片与侧栏盘符
+  async refreshDriveLabels() {
+    if (!this.ipcRenderer) return;
+    try {
+      const result = await this.ipcRenderer.invoke('get-volume-labels');
+      if (result.success) {
+        this._driveLabels = {};
+        (result.volumes || []).forEach(v => {
+          this._driveLabels[v.drive] = v.label;
+        });
+      }
+      this.applyDriveLabelsToSidebar();
+      const grid = document.getElementById('drives-grid');
+      if (grid) {
+        this.renderDrives();
+      }
+    } catch (err) {
+      console.error('refreshDriveLabels error:', err);
+    }
+  }
+
+  // 侧栏盘符按钮的标题（tooltip）显示真实卷标，如 "Windows (C:)"
+  applyDriveLabelsToSidebar() {
+    document.querySelectorAll('.nav-sidebar-drive[data-path]').forEach(btn => {
+      const m = (btn.dataset.path || '').match(/^([A-Za-z]):\\?$/);
+      if (!m) return;
+      const letter = m[1].toUpperCase();
+      const label = (this._driveLabels || {})[letter];
+      btn.title = label ? `${label} (${letter}:)` : `本地磁盘 (${letter}:)`;
+    });
+  }
+
+  async openVolumeLabelModal() {
+    if (!this.volumeLabelOverlay || !this.ipcRenderer) return;
+    this.volumeLabelOverlay.classList.remove('is-hidden');
+    this.volumeLabelList.innerHTML = '<div class="volume-label-empty">加载中...</div>';
+    try {
+      const result = await this.ipcRenderer.invoke('get-volume-labels');
+      if (!result.success) throw new Error(result.error || '获取卷标失败');
+      this._volumeLabelsOriginal = result.volumes || [];
+      this.renderVolumeLabelRows(this._volumeLabelsOriginal);
+    } catch (err) {
+      console.error('openVolumeLabelModal error:', err);
+      this.volumeLabelList.innerHTML = '<div class="volume-label-empty">加载失败: ' + this.escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  renderVolumeLabelRows(volumes) {
+    if (!this.volumeLabelList) return;
+    if (!volumes || volumes.length === 0) {
+      this.volumeLabelList.innerHTML = '<div class="volume-label-empty">未发现已挂载的磁盘</div>';
+      return;
+    }
+    this.volumeLabelList.innerHTML = volumes.map(v => `
+      <div class="volume-label-row" data-drive="${v.drive}">
+        <span class="volume-label-row__drive">${v.drive}:</span>
+        <input type="text" class="volume-label-row__input" value="${this.escapeAttr(v.label)}" maxlength="32" placeholder="无卷标">
+      </div>
+    `).join('');
+  }
+
+  closeVolumeLabelModal() {
+    this.volumeLabelOverlay?.classList.add('is-hidden');
+  }
+
+  async saveVolumeLabels() {
+    if (!this.ipcRenderer || !this.volumeLabelList) return;
+    const rows = this.volumeLabelList.querySelectorAll('.volume-label-row');
+    const changes = [];
+    rows.forEach(row => {
+      const drive = row.dataset.drive;
+      const input = row.querySelector('.volume-label-row__input');
+      const original = (this._volumeLabelsOriginal || []).find(v => v.drive === drive);
+      const newLabel = input ? input.value.trim() : '';
+      if (!original || original.label !== newLabel) {
+        changes.push({ drive, label: newLabel });
+      }
+    });
+
+    if (changes.length === 0) {
+      this.closeVolumeLabelModal();
+      return;
+    }
+
+    const errors = [];
+    for (const c of changes) {
+      try {
+        const r = await this.ipcRenderer.invoke('set-volume-label', c);
+        if (!r.success) errors.push(`${c.drive}: ${r.error}`);
+      } catch (e) {
+        errors.push(`${c.drive}: ${e.message}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      this.showDialog('错误', '部分卷标修改失败：\n' + errors.join('\n'), 'error');
+      return;
+    }
+
+    this.closeVolumeLabelModal();
+    // 刷新卷标缓存 + 主页卡片 + 侧栏
+    await this.refreshDriveLabels();
+  }
+  
   async updateConfigPathInfo() {
     try {
       if (this.ipcRenderer) {

@@ -139,6 +139,70 @@ ipcMain.on('pwsh-get-path', (event) => {
   event.returnValue = resolvePowerShellPath();
 });
 
+// ========== 卷标：读取 / 修改已挂载磁盘的卷标（pwsh Get-Volume / Set-Volume） ==========
+function runPwshScript(script, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    try {
+      const pwsh = resolvePowerShellPath();
+      const encoded = Buffer.from(script, 'utf16le').toString('base64');
+      exec(`"${pwsh}" -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+        encoding: 'utf-8',
+        timeout: timeoutMs,
+        windowsHide: true
+      }, (err, stdout) => {
+        if (err) {
+          resolve({ success: false, error: err.message, stdout });
+          return;
+        }
+        resolve({ success: true, stdout: (stdout || '').trim() });
+      });
+    } catch (e) {
+      resolve({ success: false, error: e.message });
+    }
+  });
+}
+
+ipcMain.handle('get-volume-labels', async () => {
+  const script = 'Get-Volume | Where-Object { $_.DriveLetter } | Select-Object DriveLetter, FileSystemLabel | ConvertTo-Json -Compress';
+  const result = await runPwshScript(script);
+  if (!result.success) {
+    return { success: false, volumes: [], error: result.error };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout || '[]');
+    const list = Array.isArray(parsed) ? parsed : (parsed && parsed.DriveLetter ? [parsed] : []);
+    const volumes = list
+      .filter(v => v.DriveLetter && /^[A-Z]$/i.test(v.DriveLetter))
+      .map(v => ({ drive: v.DriveLetter.toUpperCase(), label: v.FileSystemLabel || '' }))
+      .sort((a, b) => a.drive.localeCompare(b.drive));
+    return { success: true, volumes };
+  } catch (err) {
+    return { success: false, volumes: [], error: err.message };
+  }
+});
+
+ipcMain.handle('set-volume-label', async (event, { drive, label }) => {
+  try {
+    const d = String(drive || '').trim().toUpperCase();
+    if (!/^[A-Z]$/.test(d)) {
+      return { success: false, error: '无效的盘符' };
+    }
+    // 清洗卷标：去掉引号/控制字符，限制长度
+    const l = String(label || '')
+      .replace(/[\u0000-\u001f"']/g, '')
+      .trim()
+      .slice(0, 32);
+    const script = `Set-Volume -DriveLetter '${d}' -NewFileSystemLabel '${l}'`;
+    const result = await runPwshScript(script);
+    if (!result.success) {
+      return { success: false, drive: d, error: result.error };
+    }
+    return { success: true, drive: d, label: l };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ========== 运行命令路径解析（修复启动台历史里的相对路径命令） ==========
 function resolveCommandPath(command) {
   const trimmed = (command || '').trim();

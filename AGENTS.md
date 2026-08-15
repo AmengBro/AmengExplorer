@@ -121,6 +121,7 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 13. **外部 amsys 动态解析**: 内嵌 amsys 旁的 config.ini 可配置 `amsys=`（绝对路径或类 Unix 路径如 `/bin/com.amsys.app`），程序通过内嵌 amsys 解析后调用外部 amsys
 14. **图标映射重构**: `config/icons.json` 改为 `_types` 扩展名表（扩展名 → Fluent 图标名，值直接匹配图标库），`getFileIcon` 直接查表；符号链接目录用 Folder Link 图标（去掉三角标）、归档文件用 Folder Zip
 15. **符号链接目录大小查询**: 列表/分栏/网格视图对符号链接目录不再显示“→ 链接”，改为与普通目录一致显示“查看”并支持大小计算
+16. **磁盘卷标显示与修改**: 卷标启动时预处理缓存（`get-volume-labels` IPC），主页驱动器卡片与侧栏盘符均显示真实卷标（如 `Windows (C:)`）；主菜单“驱动器”右侧铅笔按钮打开遮罩窗，可对已挂载磁盘修改卷标并刷新缓存（主进程 pwsh `Get-Volume`/`Set-Volume`，`-EncodedCommand` 免引号问题）
 
 ## 开发约定
 

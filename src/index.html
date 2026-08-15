@@ -135,6 +135,7 @@
               <section class="drives-section">
                 <div class="drives-section__header">
                   <h2 class="drives-section__title">驱动器</h2>
+                  <button class="drives-label-btn" id="drives-label-btn" data-icon="pencil" title="修改卷标"></button>
                 </div>
                 <div class="drives-section__grid" id="drives-grid">
                   <div class="drive-card" data-path="/">
@@ -148,6 +149,23 @@
                   </div>
                 </div>
               </section>
+            </div>
+          </div>
+
+          <!-- 修改卷标遮罩 -->
+          <div class="volume-label-overlay is-hidden" id="volume-label-overlay">
+            <div class="volume-label-container">
+              <div class="volume-label-header">
+                <span class="volume-label-title">修改卷标</span>
+                <button class="volume-label-close" id="volume-label-close" title="关闭 (Esc)">×</button>
+              </div>
+              <div class="volume-label-body">
+                <div class="volume-label-list" id="volume-label-list"></div>
+              </div>
+              <div class="volume-label-footer">
+                <button class="setting-btn-secondary" id="volume-label-cancel">取消</button>
+                <button class="setting-btn-primary" id="volume-label-save">保存</button>
+              </div>
             </div>
           </div>
 

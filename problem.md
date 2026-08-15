@@ -23,6 +23,7 @@
 - [x] **检查更新实现**：主进程 `check-updates` IPC 调用 GitHub Releases API（`/repos/AmengBro/AmengExplorer/releases/latest`）获取 `tag_name`，与 `app.getVersion()` 做 semver 比较；渲染进程内联显示“已是最新版本”/“检查到新版本”+“前往下载”（`shell.openExternal` 跳 release 页），无弹窗、无数据库。
 - [x] **图标映射重构**：`config/icons.json` 重构为 `_types` 扩展名表（扩展名 → Fluent 图标名，可直接匹配 `@fluentui/svg-icons`），`getFileIcon` 由 60 行 if 链改为查表；符号链接目录用 `folder_link` 图标并移除右下角三角标，归档文件（zip/rar/7z/tar/gz 等）用 `folder_zip`；按指定映射替换 pdf/ppt/xls/doc/css/js/dll/sys/cer/ini/msc/toml 等图标。
 - [x] **符号链接目录大小查询**：列表/分栏/网格视图的符号链接目录不再显示“→ 链接”，与普通目录一样显示“查看”按钮并支持大小计算（Windows 下 junction/符号链接对 fs 遍历透明）。
+- [x] **磁盘卷标显示与修改**：卷标启动时预处理并缓存（`_driveLabels`，主进程 `get-volume-labels` IPC），主页驱动器卡片与左侧栏盘符按钮（原“本地磁盘 (C:)”写死）统一显示真实卷标（如 `Windows (C:)`）；主菜单“驱动器”标题右侧新增铅笔按钮（`pencil`→Fluent `edit` 图标），点击打开遮罩窗列出已挂载磁盘，可逐个修改卷标并保存后刷新缓存（主进程 `set-volume-label` IPC，pwsh `Get-Volume`/`Set-Volume` + `-EncodedCommand`，卷标做了引号/控制符清洗与 32 字符限制）。
 - [x] **P2 用户配置不再做应用侧路径解析**：`user-config.js` 已删除 `resolveAppRoot()\root` 默认值，虚拟根完全以 amsys `resolve /` 的结果为准（`UserConfig` 构造函数必须显式传入 amsys 解析出的根路径）。
 - [x] **P2 Everything 依赖已彻底移除**：`launchpad-check-everything` / `launchpad-open-everything` / `resolveEverythingExecutables` / `parseEverythingCSV`、设置项 `everythingPath` / `everythingEnabled` 及设置面板 UI 全部删除，搜索仅依赖本地文件索引 + PATH 扫描。
 - [x] **P2 跨卷移动失败已修复**：删除到回收站 / 恢复 / 剪切粘贴统一走 `movePathWithFallback()`，`renameSync` 抛 EXDEV 时自动 `cpSync` + 删除兜底。
