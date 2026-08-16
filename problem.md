@@ -24,6 +24,13 @@
 - [x] **图标映射重构**：`config/icons.json` 重构为 `_types` 扩展名表（扩展名 → Fluent 图标名，可直接匹配 `@fluentui/svg-icons`），`getFileIcon` 由 60 行 if 链改为查表；符号链接目录用 `folder_link` 图标并移除右下角三角标，归档文件（zip/rar/7z/tar/gz 等）用 `folder_zip`；按指定映射替换 pdf/ppt/xls/doc/css/js/dll/sys/cer/ini/msc/toml 等图标。
 - [x] **符号链接目录大小查询**：列表/分栏/网格视图的符号链接目录不再显示“→ 链接”，与普通目录一样显示“查看”按钮并支持大小计算（Windows 下 junction/符号链接对 fs 遍历透明）。
 - [x] **磁盘卷标显示与修改**：卷标启动时预处理并缓存（`_driveLabels`，主进程 `get-volume-labels` IPC），主页驱动器卡片与左侧栏盘符按钮（原“本地磁盘 (C:)”写死）统一显示真实卷标（如 `Windows (C:)`）；主菜单“驱动器”标题右侧新增铅笔按钮（`pencil`→Fluent `edit` 图标），点击打开遮罩窗列出已挂载磁盘，可逐个修改卷标并保存后刷新缓存（主进程 `set-volume-label` IPC，pwsh `Get-Volume`/`Set-Volume` + `-EncodedCommand`，卷标做了引号/控制符清洗与 32 字符限制）。
+- [x] **右键菜单对齐修复**：`.context-menu-item span:first-of-type` 会把 `flex:1` 误加到图标占位 `.icon-wrapper` 上导致菜单项文字错位；已改为 `> span:not(.icon-wrapper):not(.context-menu-shortcut)`，并移除 Shell 菜单动态项的空图标占位，主菜单与子菜单文字对齐；子菜单加 `max-height` + 滚动防溢出。
+- [x] **Shell 右键菜单可靠性修复**：脚本改为支持驱动器根目录（`Namespace` 回退 + `folder.Self`）；过滤 shell 扩展（分享菜单等）写入 stdout 的日志行；无 pwsh 时显示友好提示；失败提供“重试”按钮；temp 脚本 `finally` 兜底删除；超时 10s→15s。
+- [x] **主题色扩展与自定义取色**：预置色 10 种（新增 teal/pink/yellow/cyan/slate），`applyAccentColor` 支持 hex→HSL 自定义颜色（`<input type="color">`），自定义色持久化为 hex，预设/自定义状态由 `_accentMode` 区分。
+- [x] **根目录挂载盘去重**：fstab 允许把磁盘根挂载到虚拟根（如 `C:\ = /`）；`loadDrivesAsync` 对每个 `/media/<盘符>` 用 `vfs.toWindows` 取真实路径与 `vfs.root_` 归一比较（忽略大小写与结尾分隔符），相等则跳过该挂载点；侧栏盘符按钮同步隐藏。
+- [x] **配置文件完全外部化**：`forge.config.js` 的 ignore 排除 `config/`（不再进 asar），新增 `afterComplete` 钩子把项目 `config/`（icons/settings/launchpad-history.json）直接复制到 exe 旁；`config.ini` 仍与 amsys.exe 同级解包到 `app.asar.unpacked`。实测：exe 旁 `config/` 三件齐全、asar 内无 `config/*.json`、`config.ini` 在解包目录。
+- [x] **Shell 右键菜单恒显示“没有其他选项”修复**：定位为 `populateShellMenu` 的 `escapedPath = winPath.replace(/'/g,"''").replace(/\\/g,"\\\\")` 把路径反斜杠翻倍，PowerShell 单引号字符串中 `C:\\Windows` 即两个反斜杠，`$shell.Namespace` 返回 null → 0 动词。A/B 实测确认（翻倍→folderNull=True；单斜杠→21 verbs）。已改为只转义单引号，普通文件/虚拟根文件/目录均正常返回 verbs。
+- [x] **二级菜单防溢出**：原仅有 `max-height`，子菜单从父项顶部向下展开时仍会冲出下边缘；新增 `positionContextSubmenu()`——按 `视口高度 - 父项顶部 - 8px` 动态限高（超高 `overflow-y` 滚轮滚动）、水平翻转、内容加载完成/重试后重新定位，菜单永不超出屏幕下边缘。
 - [x] **P2 用户配置不再做应用侧路径解析**：`user-config.js` 已删除 `resolveAppRoot()\root` 默认值，虚拟根完全以 amsys `resolve /` 的结果为准（`UserConfig` 构造函数必须显式传入 amsys 解析出的根路径）。
 - [x] **P2 Everything 依赖已彻底移除**：`launchpad-check-everything` / `launchpad-open-everything` / `resolveEverythingExecutables` / `parseEverythingCSV`、设置项 `everythingPath` / `everythingEnabled` 及设置面板 UI 全部删除，搜索仅依赖本地文件索引 + PATH 扫描。
 - [x] **P2 跨卷移动失败已修复**：删除到回收站 / 恢复 / 剪切粘贴统一走 `movePathWithFallback()`，`renameSync` 抛 EXDEV 时自动 `cpSync` + 删除兜底。

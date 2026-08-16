@@ -122,6 +122,12 @@ AmengExplorer 是一个 Electron 文件管理器应用，基于 Node.js + 原生
 14. **图标映射重构**: `config/icons.json` 改为 `_types` 扩展名表（扩展名 → Fluent 图标名，值直接匹配图标库），`getFileIcon` 直接查表；符号链接目录用 Folder Link 图标（去掉三角标）、归档文件用 Folder Zip
 15. **符号链接目录大小查询**: 列表/分栏/网格视图对符号链接目录不再显示“→ 链接”，改为与普通目录一致显示“查看”并支持大小计算
 16. **磁盘卷标显示与修改**: 卷标启动时预处理缓存（`get-volume-labels` IPC），主页驱动器卡片与侧栏盘符均显示真实卷标（如 `Windows (C:)`）；主菜单“驱动器”右侧铅笔按钮打开遮罩窗，可对已挂载磁盘修改卷标并刷新缓存（主进程 pwsh `Get-Volume`/`Set-Volume`，`-EncodedCommand` 免引号问题）
+17. **右键菜单对齐与 Shell 菜单可靠性**: 修复 `.context-menu-item span:first-of-type` 误匹配图标占位导致的项目错位；Shell 菜单脚本支持驱动器根目录、过滤 shell 扩展日志行、无 pwsh 友好提示、失败可重试、temp 脚本兜底清理、超时放宽至 15s
+18. **主题色扩展与自定义取色**: 预置强调色 10 种（新增 teal/pink/yellow/cyan/slate），支持 `<input type="color">` 自定义颜色（hex→HSL 应用到 `--primary`/`--accent`）
+19. **根目录挂载盘去重**: fstab 若把磁盘根挂载到虚拟根（如 `C:\ = /`），主页驱动器卡片与侧栏盘符不再重复显示该挂载点（比较挂载点 Windows 路径与虚拟根路径）
+20. **配置文件完全外部化**: `config/`（icons.json / settings.json / launchpad-history.json）不打包进 asar，构建完成后由 `afterComplete` 直接复制到 exe 旁 `config/`；`config.ini` 与 amsys.exe 同级解包（`app.asar.unpacked`），全部配置均在 asar 之外可读可写
+21. **Shell 右键菜单“没有其他选项”修复**: 根因是 `escapedPath` 把 Windows 路径反斜杠翻倍（`C:\\Windows`），PowerShell 单引号字符串不认 `\\` 转义，导致 `Shell.Application.Namespace` 返回空；改为只转义单引号，`C:\Windows` 正常解析并返回 verbs
+22. **二级菜单防溢出**: `positionContextSubmenu()` 按父菜单项下方可用空间动态限高（超高自动滚轮滚动），水平放不下时翻转到左侧；mouseenter、内容加载完成、重试后均重新定位
 
 ## 开发约定
 

@@ -29,6 +29,8 @@ module.exports = {
       // 打包输出目录（防止上次产物被再次递归包含）
       /^[\\/]out([\\/]|$)/,
       /^[\\/]out-test([\\/]|$)/,
+      // 应用配置：不打包进 asar，构建完成后直接复制到 exe 旁 config/（完全外部可写）
+      /^[\\/]config([\\/]|$)/,
       // 项目源码中非运行时目录
       /^[\\/]example([\\/]|$)/,
       /^[\\/]docs([\\/]|$)/,
@@ -53,6 +55,24 @@ module.exports = {
         mirror: 'https://npmmirror.com/mirrors/electron/',
       },
     },
+    // 构建完成后把项目 config/ 复制到 exe 旁，使配置完全暴露在 asar 之外
+    afterComplete: [
+      async (buildPath) => {
+        const fs = require('fs');
+        const path = require('path');
+        const src = path.join(__dirname, 'config');
+        const dest = path.join(buildPath, 'config');
+        if (!fs.existsSync(src)) return;
+        fs.mkdirSync(dest, { recursive: true });
+        for (const file of fs.readdirSync(src)) {
+          const s = path.join(src, file);
+          if (fs.statSync(s).isFile()) {
+            fs.copyFileSync(s, path.join(dest, file));
+          }
+        }
+        console.log(`[forge] 已复制配置到 exe 旁: ${dest}`);
+      },
+    ],
   },
   rebuildConfig: {},
   makers: [

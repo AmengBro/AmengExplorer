@@ -1,3 +1,39 @@
+// 强调色预置表：名称 -> { hsl 变量值, 十六进制 }（自定义颜色直接存 hex）
+const ACCENT_PRESETS = {
+  blue: { hsl: '220 80% 50%', hex: '#4f8cff' },
+  purple: { hsl: '270 80% 50%', hex: '#9d5cff' },
+  green: { hsl: '140 70% 45%', hex: '#22c55e' },
+  orange: { hsl: '30 90% 50%', hex: '#f97316' },
+  red: { hsl: '0 80% 55%', hex: '#ef4444' },
+  teal: { hsl: '180 90% 45%', hex: '#14b8a6' },
+  pink: { hsl: '330 90% 60%', hex: '#ec4899' },
+  yellow: { hsl: '48 95% 55%', hex: '#eab308' },
+  cyan: { hsl: '190 95% 50%', hex: '#06b6d4' },
+  slate: { hsl: '215 20% 55%', hex: '#64748b' }
+};
+
+function hexToHsl(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
+  if (!m) return '220 80% 50%';
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
+}
+
 class FileManager {
   constructor() {
     this.vfs = new (require('./js/virtual-fs'))();
@@ -2237,7 +2273,13 @@ class FileManager {
           return a.name.localeCompare(b.name);
         });
 
-        sortedEntries.forEach(entry => {
+        for (const entry of sortedEntries) {
+          // fstab 可能把磁盘根挂载到虚拟根（如 C:\ = /）：该挂载点不再重复显示
+          const winPath = await this.vfs.toWindows('/media/' + entry.name);
+          if (this.sameWindowsPath(winPath, this.vfs.root_)) {
+            continue;
+          }
+
           const driveCard = document.createElement('div');
           driveCard.className = 'drive-card';
           driveCard.dataset.path = '/media/' + entry.name;
@@ -2259,13 +2301,32 @@ class FileManager {
             this.loadDirectory(driveCard.dataset.path);
           });
           grid.appendChild(driveCard);
-        });
+        }
+        this.applyRootDriveFilter();
       }
     } catch (err) {
       console.error('loadDrivesAsync error:', err);
     } finally {
       this._loadingDrives = false;
     }
+  }
+
+  // 比较两个 Windows 路径是否指向同一位置（忽略大小写与结尾分隔符）
+  sameWindowsPath(a, b) {
+    if (!a || !b) return false;
+    const norm = (p) => String(p).replace(/[\\/]+$/, '').toLowerCase();
+    return norm(a) === norm(b);
+  }
+
+  // 若某个磁盘本身就是虚拟根（fstab 挂载），隐藏对应侧栏盘符按钮
+  applyRootDriveFilter() {
+    const root = this.vfs && this.vfs.root_;
+    if (!root) return;
+    document.querySelectorAll('.nav-sidebar-drive[data-path]').forEach(btn => {
+      if (this.sameWindowsPath(btn.dataset.path, root)) {
+        btn.classList.add('is-hidden');
+      }
+    });
   }
 
   getSystemDrives() {
@@ -2577,6 +2638,37 @@ class FileManager {
     });
   }
 
+  // 定位“更多选项”二级菜单：水平放不下时翻转到左侧，底部放不下时上移夹取；
+  // 超高菜单由 CSS max-height + overflow-y 滚动压缩
+  positionContextSubmenu() {
+    const submenu = document.querySelector('.context-menu-submenu');
+    const submenuBtn = submenu && submenu.querySelector('.context-menu-item');
+    const content = submenu && submenu.querySelector('.context-menu-submenu-content');
+    if (!submenuBtn || !content) return;
+
+    const rect = submenuBtn.getBoundingClientRect();
+    const submenuWidth = content.offsetWidth || 300;
+
+    // 水平
+    if (rect.right + submenuWidth > window.innerWidth) {
+      content.style.left = 'auto';
+      content.style.right = 'calc(100% - 4px)';
+    } else {
+      content.style.left = 'calc(100% - 4px)';
+      content.style.right = 'auto';
+    }
+
+    // 垂直：按父项下方可用空间动态限高（超高自动滚轮滚动），保证不超出下边缘
+    content.style.top = '0px';
+    const fullHeight = content.scrollHeight || 0;
+    const available = Math.max(80, window.innerHeight - rect.top - 8);
+    if (fullHeight > available) {
+      content.style.maxHeight = available + 'px';
+    } else {
+      content.style.maxHeight = '';
+    }
+  }
+
   initContextMenu() {
     this.contextMenu = document.getElementById('context-menu');
     this.contextMenuContent = this.contextMenu.querySelector('.context-menu-content');
@@ -2613,32 +2705,19 @@ class FileManager {
     const moreOptionsBtn = document.getElementById('ctx-more-options');
 
     submenu.addEventListener('mouseenter', async () => {
-      const submenuBtn = submenu.querySelector('.context-menu-item');
-      if (submenuBtn) {
-        const rect = submenuBtn.getBoundingClientRect();
-        const submenuWidth = 300;
-
-        if (rect.right + submenuWidth > window.innerWidth) {
-          submenuContent.style.left = 'auto';
-          submenuContent.style.right = 'calc(100% - 4px)';
-        } else {
-          submenuContent.style.left = 'calc(100% - 4px)';
-          submenuContent.style.right = 'auto';
-        }
-      }
+      this.positionContextSubmenu();
 
       if (this.selectedItems.length > 0 && !this.shellMenuLoaded) {
-        submenuContent.innerHTML = '<button class="context-menu-item"><span class="icon-wrapper"></span><span>加载中...</span></button>';
-
         const path = this.selectedItems[0];
         try {
           const winPath = await this.vfs.toWindows(path);
           if (winPath) {
             await this.populateShellMenu(winPath);
+            // 内容加载完成后重新夹取位置（菜单高度可能变化）
+            this.positionContextSubmenu();
           }
         } catch (err) {
           console.error(err);
-          submenuContent.innerHTML = '<button class="context-menu-item"><span class="icon-wrapper"></span><span>加载失败</span></button>';
         }
       }
     });
@@ -2646,6 +2725,7 @@ class FileManager {
     moreOptionsBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       submenu.classList.toggle('submenu-pinned');
+      this.positionContextSubmenu();
     });
 
     document.getElementById('ctx-copy').addEventListener('click', () => {
@@ -2918,92 +2998,69 @@ class FileManager {
     this.contextMenuContent.style.top = finalY + 'px';
   }
 
-  async populateShellMenu(winPath) {
+  async populateShellMenu(winPath, retry = true) {
     const submenuContent = document.getElementById('ctx-more-options-content');
 
-    submenuContent.innerHTML = '<button class="context-menu-item"><span class="icon-wrapper"></span><span>加载中...</span></button>';
+    submenuContent.innerHTML = '<button class="context-menu-item"><span>加载中...</span></button>';
+
+    const { exec } = require('child_process');
+    const fs = require('fs');
+    const path = require('path');
+    const util = require('util');
+    const execPromise = util.promisify(exec);
+    const tempDir = require('os').tmpdir();
+    const tempFile = path.join(tempDir, `shell_menu_${Date.now()}.ps1`);
 
     try {
-      const { exec } = require('child_process');
-      const fs = require('fs');
-      const path = require('path');
-      const util = require('util');
-      const execPromise = util.promisify(exec);
-
-      const tempDir = require('os').tmpdir();
-      const tempFile = path.join(tempDir, `shell_menu_${Date.now()}.ps1`);
-
-      const escapedPath = winPath.replace(/'/g, "''").replace(/\\/g, "\\\\");
-
+      // PowerShell 单引号字符串不认 \\ 转义：只转义引号，保留单反斜杠路径
+      const escapedPath = winPath.replace(/'/g, "''");
+      
       const psScript = `
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-        [Console]::InputEncoding = [System.Text.Encoding]::UTF8
-
         $filePath = '${escapedPath}'
-        Write-Host "DEBUG: filePath = $filePath"
-
-        if (-not (Test-Path $filePath)) {
-            Write-Host "ERROR: Path does not exist"
-            exit 1
-        }
-
         $shell = New-Object -ComObject Shell.Application
         $parentDir = Split-Path -Path $filePath -Parent
         $fileName = Split-Path -Path $filePath -Leaf
-
-        Write-Host "DEBUG: parentDir = $parentDir"
-        Write-Host "DEBUG: fileName = $fileName"
-
         if (-not $parentDir) {
             $parentDir = 'C:\\'
         }
-
         $folder = $shell.Namespace($parentDir)
-        if (-not $folder) {
-            Write-Host "ERROR: Cannot get folder"
-            exit 1
+        if (-not $folder) { $folder = $shell.Namespace($filePath) }
+        $item = $null
+        if ($folder) {
+            if ($fileName) { $item = $folder.ParseName($fileName) }
+            if (-not $item) { $item = $folder.Self }
         }
-
-        $item = $folder.ParseName($fileName)
-
-        if (-not $item) {
-            Write-Host "ERROR: Cannot get item"
-            exit 1
-        }
-
-        $verbs = $item.Verbs()
-        Write-Host "DEBUG: Found $($verbs.Count) verbs"
-
-        if ($verbs) {
-            $verbs | ForEach-Object {
-                $_.Name -replace '&', ''
-            }
+        if ($item) {
+            $verbs = $item.Verbs()
+            if ($verbs) { $verbs | ForEach-Object { $_.Name -replace '&', '' } }
         }
       `;
 
       fs.writeFileSync(tempFile, psScript, 'utf8');
 
       const pwsh = this.getPowerShellPath();
-      const { stdout, stderr } = await execPromise(`"${pwsh}" -NoProfile -ExecutionPolicy Bypass -File "${tempFile}"`, {
-        timeout: 10000
+      const { stdout } = await execPromise(`"${pwsh}" -NoProfile -ExecutionPolicy Bypass -File "${tempFile}"`, {
+        timeout: 15000
       });
 
-      fs.unlinkSync(tempFile);
-
       console.log('populateShellMenu stdout:', stdout);
-      if (stderr) {
-        console.log('populateShellMenu stderr:', stderr);
-      }
 
-      const lines = stdout.split('\n').filter(v => v.trim());
-      const verbs = lines.filter(v => !v.startsWith('DEBUG:') && !v.startsWith('ERROR:'));
+      // 过滤 DEBUG/ERROR 前缀与 shell 扩展（分享菜单等）写入 stdout 的日志行
+      const lines = stdout.split('\n').map(v => v.trim()).filter(Boolean);
+      const verbs = lines.filter(v =>
+        !v.startsWith('DEBUG:') &&
+        !v.startsWith('ERROR:') &&
+        !/^\(\d{4}-\d{2}-\d{2}/.test(v) &&
+        !/\[(WARN|ERROR|INFO)\]/.test(v)
+      );
 
       submenuContent.innerHTML = '';
 
       if (verbs.length === 0) {
         const noVerbBtn = document.createElement('button');
         noVerbBtn.className = 'context-menu-item';
-        noVerbBtn.innerHTML = '<span class="icon-wrapper"></span><span>没有其他选项</span>';
+        noVerbBtn.innerHTML = '<span>没有其他选项</span>';
         submenuContent.appendChild(noVerbBtn);
         return;
       }
@@ -3013,7 +3070,7 @@ class FileManager {
       verbs.forEach((verb, index) => {
         const btn = document.createElement('button');
         btn.className = 'context-menu-item';
-        btn.innerHTML = '<span class="icon-wrapper"></span><span>' + verb.trim() + '</span>';
+        btn.innerHTML = '<span>' + this.escapeHtml(verb.trim()) + '</span>';
         btn.addEventListener('click', () => {
           this.executeShellVerb(winPath, verb.trim());
           this.hideContextMenu();
@@ -3023,11 +3080,24 @@ class FileManager {
 
     } catch (err) {
       console.error('populateShellMenu error:', err.message, err.stderr, err.stdout);
+      const isMissingPwsh = /ENOENT|spawn .*pwsh|not recognized|找不到.*pwsh/i.test(String(err.message || ''));
       submenuContent.innerHTML = '';
-      const errorBtn = document.createElement('button');
-      errorBtn.className = 'context-menu-item';
-      errorBtn.innerHTML = `<span>错误: ${err.message.substring(0, 30)}...</span>`;
-      submenuContent.appendChild(errorBtn);
+      const msgBtn = document.createElement('button');
+      msgBtn.className = 'context-menu-item';
+      msgBtn.innerHTML = `<span>${isMissingPwsh ? '未找到 PowerShell（pwsh），请将 pwsh7 放入程序目录' : '加载失败'}</span>`;
+      submenuContent.appendChild(msgBtn);
+      if (retry) {
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'context-menu-item';
+        retryBtn.innerHTML = '<span>重试</span>';
+        retryBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.populateShellMenu(winPath, false).then(() => this.positionContextSubmenu());
+        });
+        submenuContent.appendChild(retryBtn);
+      }
+    } finally {
+      try { fs.unlinkSync(tempFile); } catch (e) {}
     }
   }
 
@@ -3053,7 +3123,12 @@ class FileManager {
         }
 
         $folder = $shell.Namespace($parentDir)
-        $item = $folder.ParseName($fileName)
+        if (-not $folder) { $folder = $shell.Namespace($filePath) }
+        $item = $null
+        if ($folder) {
+            if ($fileName) { $item = $folder.ParseName($fileName) }
+            if (-not $item) { $item = $folder.Self }
+        }
 
         if ($item) {
             $verbs = $item.Verbs()
@@ -5420,6 +5495,8 @@ class FileManager {
     // 外观设置
     this.settingTheme = document.getElementById('setting-theme');
     this.settingAccentColors = document.querySelectorAll('.setting-color-swatch');
+    this.settingAccentCustom = document.getElementById('setting-accent-custom');
+    this._accentMode = 'preset';
     this.settingHomeBanner = document.getElementById('setting-home-banner');
     this.settingHomeBannerPick = document.getElementById('setting-home-banner-pick');
     this.settingHomeBannerFile = document.getElementById('setting-home-banner-file');
@@ -5498,9 +5575,25 @@ class FileManager {
         const color = swatch.dataset.color;
         this.settingAccentColors.forEach(s => s.classList.remove('active'));
         swatch.classList.add('active');
+        this._accentMode = 'preset';
+        if (this.settingAccentCustom) {
+          this.settingAccentCustom.value = ACCENT_PRESETS[color].hex;
+          this.settingAccentCustom.closest('.setting-color-custom')?.classList.remove('active');
+        }
         this.applyAccentColor(color);
         this.saveSettings();
       });
+    });
+
+    // 自定义强调色
+    this.settingAccentCustom?.addEventListener('input', () => {
+      this.settingAccentColors.forEach(s => s.classList.remove('active'));
+      this.settingAccentCustom.closest('.setting-color-custom')?.classList.add('active');
+      this._accentMode = 'custom';
+      this.applyAccentColor(this.settingAccentCustom.value);
+    });
+    this.settingAccentCustom?.addEventListener('change', () => {
+      this.saveSettings();
     });
 
     // 主页横幅图片 URL
@@ -5707,6 +5800,14 @@ class FileManager {
       this.settingAccentColors.forEach(swatch => {
         swatch.classList.toggle('active', swatch.dataset.color === settings.accentColor);
       });
+      const isPreset = !!ACCENT_PRESETS[settings.accentColor];
+      this._accentMode = isPreset ? 'preset' : 'custom';
+      if (this.settingAccentCustom) {
+        this.settingAccentCustom.value = isPreset
+          ? ACCENT_PRESETS[settings.accentColor].hex
+          : (/^#?[0-9a-fA-F]{6}$/.test(settings.accentColor) ? settings.accentColor : '#4f8cff');
+        this.settingAccentCustom.closest('.setting-color-custom')?.classList.toggle('active', !isPreset);
+      }
       this.applyAccentColor(settings.accentColor);
     }
     if (settings.homeBanner !== undefined) {
@@ -5719,14 +5820,14 @@ class FileManager {
 
   // 强调色：作用于“查看”、设置菜单等原本固定为蓝色的界面元素（--primary）
   applyAccentColor(color) {
-    const map = {
-      blue: '220 80% 50%',
-      purple: '270 80% 50%',
-      green: '140 70% 45%',
-      orange: '30 90% 50%',
-      red: '0 80% 55%'
-    };
-    const hsl = map[color] || map.blue;
+    let hsl;
+    if (ACCENT_PRESETS[color]) {
+      hsl = ACCENT_PRESETS[color].hsl;
+    } else if (/^#?[0-9a-fA-F]{6}$/.test(color || '')) {
+      hsl = hexToHsl(color);
+    } else {
+      hsl = ACCENT_PRESETS.blue.hsl;
+    }
     document.documentElement.style.setProperty('--primary', hsl);
     document.documentElement.style.setProperty('--accent', hsl);
   }
@@ -5872,6 +5973,9 @@ class FileManager {
   }
 
   getActiveAccentColor() {
+    if (this._accentMode === 'custom' && this.settingAccentCustom) {
+      return this.settingAccentCustom.value;
+    }
     const active = document.querySelector('.setting-color-swatch.active');
     return active?.dataset.color || 'blue';
   }
@@ -5932,6 +6036,7 @@ class FileManager {
         });
       }
       this.applyDriveLabelsToSidebar();
+      this.applyRootDriveFilter();
       const grid = document.getElementById('drives-grid');
       if (grid) {
         this.renderDrives();
