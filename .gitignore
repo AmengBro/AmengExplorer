@@ -140,3 +140,4 @@ dist
 /.electron_cache
 node_modules.tar
 AmengExplorer/
+/root
